@@ -68,8 +68,10 @@ npm run sync:assets
 npm run tauri build
 ```
 
-Installers land under `src-tauri/target/release/bundle/` (`.exe` / `.msi` on Windows,
-`.dmg` / `.app` on macOS, `.AppImage` / `.deb` / `.rpm` on Linux).
+Installers land under `src-tauri/target/release/bundle/` (NSIS `.exe` on Windows,
+`.dmg` / `.app` on macOS, `.AppImage` / `.deb` / `.rpm` on Linux). Windows **MSI** is
+not built while the version has a word prerelease such as `-beta` (WiX only allows
+numeric versions). Use `builder\windows\build-installer.bat` for the versioned setup exe.
 
 On **Windows GNU** portable / installer scripts (`builder/windows/`), the Rust target dir is
 `src-tauri/target-gnu/` instead of `src-tauri/target/` — look for

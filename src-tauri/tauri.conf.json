@@ -39,7 +39,13 @@
   },
     "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": [
+      "nsis",
+      "appimage",
+      "deb",
+      "rpm",
+      "dmg"
+    ],
     "resources": {
       "../minecraft/26.2/": "minecraft/26.2/",
       "../minecraft/26.1/": "minecraft/26.1/",
