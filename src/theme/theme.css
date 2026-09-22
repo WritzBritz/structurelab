@@ -1,0 +1,219 @@
+.theme-toggle-btn {
+  min-width: 7.5rem;
+}
+
+.theme-menu {
+  box-sizing: border-box;
+  min-width: 13.5rem;
+  padding: 6px;
+  border: 1px solid var(--gray-a6);
+  border-radius: var(--radius-4, 10px);
+  background: var(--color-panel-solid);
+  color: var(--gray-12);
+  box-shadow: var(--shadow-5);
+  overflow: auto;
+}
+
+.theme-menu:popover-open {
+  inset: unset;
+  margin: 0;
+}
+
+.theme-menu-label {
+  padding: 6px 8px 4px;
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--gray-11);
+}
+
+.theme-menu-separator {
+  height: 1px;
+  margin: 6px 4px;
+  background: var(--gray-a5);
+}
+
+.theme-option {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 10px 6px 28px;
+  border: 0;
+  border-radius: var(--radius-2, 6px);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.theme-option:hover,
+.theme-option:focus-visible {
+  outline: none;
+  background: var(--gray-a3);
+}
+
+.theme-option.is-checked {
+  background: var(--accent-a3);
+}
+
+.theme-option.is-checked::before {
+  content: '✓';
+  position: absolute;
+  left: 8px;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--accent-11);
+}
+
+::view-transition {
+  pointer-events: none !important;
+}
+
+::view-transition-group(*),
+::view-transition-image-pair(*),
+::view-transition-old(*),
+::view-transition-new(*) {
+  pointer-events: none !important;
+}
+
+.theme-option-copy {
+  display: grid;
+  min-width: 0;
+  line-height: 1.2;
+}
+
+.theme-swatch {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  border-radius: 4px;
+  background:
+    linear-gradient(
+      135deg,
+      var(--swatch-accent) 0 48%,
+      var(--swatch-panel) 52% 100%
+    );
+  box-shadow: inset 0 0 0 1px var(--gray-a7);
+}
+
+.theme-option-hint {
+  display: block;
+  color: var(--gray-11);
+  font-size: 11px;
+  font-weight: 400;
+}
+
+.theme-custom {
+  display: grid;
+  gap: 12px;
+}
+
+.theme-custom .ui-field {
+  margin-top: 0;
+}
+
+.theme-custom-preview {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-3, 10px);
+}
+
+.theme-custom-preview strong {
+  display: block;
+  font-size: 13px;
+}
+
+.theme-wheel {
+  display: grid;
+  gap: 8px;
+}
+
+.theme-wheel-row {
+  display: flex;
+  justify-content: center;
+  align-items: stretch;
+  gap: 12px;
+}
+
+.theme-wheel-disk,
+.theme-wheel-value {
+  position: relative;
+  flex: none;
+  touch-action: none;
+}
+
+.theme-wheel-disk {
+  width: 168px;
+  height: 168px;
+}
+
+.theme-wheel-value {
+  width: 18px;
+  height: 168px;
+}
+
+.theme-wheel-canvas {
+  display: block;
+  cursor: crosshair;
+}
+
+.theme-wheel-disk .theme-wheel-canvas {
+  border-radius: 50%;
+}
+
+.theme-wheel-value .theme-wheel-canvas {
+  width: 18px;
+  height: 168px;
+  border-radius: 999px;
+  cursor: ns-resize;
+}
+
+.theme-wheel-knob {
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px rgb(0 0 0 / 0.35);
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+.theme-wheel-value-knob {
+  position: absolute;
+  left: 50%;
+  width: 16px;
+  height: 8px;
+  border: 2px solid #fff;
+  border-radius: 4px;
+  background: #fff;
+  box-shadow: 0 0 0 1px rgb(0 0 0 / 0.35);
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation: none;
+  mix-blend-mode: normal;
+}
+
+::view-transition-old(root) {
+  z-index: 1;
+}
+
+::view-transition-new(root) {
+  z-index: 2;
+}
+
+/* If a bleed animation is interrupted, never leave the page clipped. */
+html {
+  clip-path: none;
+}

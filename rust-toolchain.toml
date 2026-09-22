@@ -1,0 +1,3 @@
+# Host-default stable toolchain (Windows, macOS, Linux).
+[toolchain]
+channel = "stable"

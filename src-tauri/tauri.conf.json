@@ -1,0 +1,65 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
+  "productName": "StructureLab",
+  "version": "../package.json",
+  "identifier": "com.structurelab.desktop",
+  "build": {
+    "frontendDist": "../dist",
+    "devUrl": "http://localhost:5173",
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build && npm run sync:assets"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "title": "StructureLab",
+        "width": 1440,
+        "height": 900,
+        "minWidth": 1050,
+        "minHeight": 700,
+        "resizable": true,
+        "fullscreen": false,
+        "center": true,
+        "visible": false,
+        "backgroundColor": "#0A29FF"
+      }
+    ],
+    "security": {
+      "csp": null,
+      "assetProtocol": {
+        "enable": true,
+        "scope": [
+          "$APP/**",
+          "$RESOURCE/**",
+          "**"
+        ]
+      }
+    }
+  },
+    "bundle": {
+    "active": true,
+    "targets": "all",
+    "resources": {
+      "../minecraft/26.2/": "minecraft/26.2/",
+      "../minecraft/26.1/": "minecraft/26.1/",
+      "../minecraft/1.21.11/": "minecraft/1.21.11/",
+      "../minecraft/1.21.6/": "minecraft/1.21.6/",
+      "../minecraft/1.21.4/": "minecraft/1.21.4/",
+      "../minecraft/1.21/": "minecraft/1.21/",
+      "../minecraft/1.20.6/": "minecraft/1.20.6/",
+      "../minecraft/1.20.4/": "minecraft/1.20.4/",
+      "../minecraft/1.20/": "minecraft/1.20/"
+    },
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "android": {
+      "debugApplicationIdSuffix": ".debug"
+    }
+  }
+}

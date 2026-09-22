@@ -1,0 +1,68 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+_buildlog.txt
+_checklog.txt
+_testlog.txt
+cargo-check-out.txt
+
+# Dependencies & build outputs
+node_modules
+dist
+dist-ssr
+*.local
+.env
+.env.*
+!.env.example
+src-tauri/target
+src-tauri/target-gnu
+src-tauri/target-msvc
+portable
+portable-linux
+# Assembled runtime assets at repo root (built by npm run sync:assets)
+/minecraft
+# Optional extra vanilla JSON (blockstates / models) from sync:entity-textures
+public/mc-data/
+StructureLab Portable.zip
+StructureLab-*-x64-setup.exe
+StructureLab-*-x64-portable.zip
+StructureLab Portable Linux*.tar.gz
+StructureLab-linux-src.zip
+
+# Local-only maintainer folder (NOT the app). Never commit; never import from src/,
+# builder/, or package.json. Holds Vitest suites, Mojang fetch helpers, VM packers.
+debug_scripts/
+
+# Repo-root scratch toolchains/extractors only. App Maps/Models code is src/tools/
+# and must stay tracked — do not use a bare "tools/" pattern here.
+/tools/
+
+# Local-only face texture overrides / Mojang fetch metadata (not shipped in git)
+src-tauri/resources/minecraft/*/block-textures/
+src-tauri/resources/minecraft/*/official-*.json
+
+# Scratch / diagnostic dumps (Maya import forensics, probes, renders)
+.tmp-msk
+.tmp-diag
+diag-out
+tmp
+audit-*.txt
+diag-*.txt
+_tmp_*
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+Thumbs.db

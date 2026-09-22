@@ -1,0 +1,100 @@
+.voxel-viewer {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+}
+
+.voxel-viewer-canvas {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  background: transparent;
+}
+
+.voxel-viewer-canvas canvas {
+  display: block;
+  width: 100% !important;
+  height: 100% !important;
+}
+
+.voxel-viewer-hint {
+  padding: 8px 2px 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.preview-style-toggle button.active {
+  color: var(--text);
+  background: var(--panel-raised);
+}
+
+.mesh-preview-host {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+}
+
+.mesh-preview-tools {
+  position: absolute;
+  z-index: 2;
+  top: 10px;
+  left: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  max-width: calc(100% - 20px);
+  padding: 8px 10px;
+  border-radius: var(--radius-3, 10px);
+  background: var(--panel-glass);
+  border: 1px solid var(--gray-a5);
+  backdrop-filter: blur(12px);
+}
+
+.mesh-preview-tools .ui-segmented {
+  width: auto;
+}
+
+.mesh-preview-tools-hint {
+  padding: 0 4px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.mesh-preview-canvas {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--plate);
+}
+
+.mesh-preview-canvas canvas {
+  display: block;
+  width: 100% !important;
+  height: 100% !important;
+}
+
+.mesh-preview-caption {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 8px 2px 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.mesh-preview-error {
+  color: #f0a0a0;
+}

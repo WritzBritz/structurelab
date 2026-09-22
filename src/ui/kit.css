@@ -1,0 +1,642 @@
+/* Layout glue for Radix primitives — chrome comes from @radix-ui/themes. */
+
+.ui-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 14px;
+  min-width: 0;
+}
+
+.ui-field > .rt-Text:first-child {
+  color: var(--gray-11);
+}
+
+.ui-field .rt-SelectTrigger,
+.ui-field .rt-TextFieldRoot,
+.ui-field .ui-segmented,
+.ui-segmented {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.ui-select-color-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ui-color-dot {
+  width: 12px;
+  height: 12px;
+  flex: none;
+  border-radius: 4px;
+  box-shadow: inset 0 0 0 1px var(--gray-a8);
+}
+
+.rt-SelectTrigger {
+  min-width: 0;
+}
+
+.rt-SelectTriggerInner {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Keep Radix `inline-grid` layout — switching to flex breaks the sliding indicator. */
+.ui-segmented.rt-SegmentedControlRoot {
+  min-width: 0;
+}
+
+.ui-segmented.is-inline {
+  width: auto;
+  max-width: 320px;
+}
+
+.ui-segmented .rt-SegmentedControlItem {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.ui-segmented .rt-SegmentedControlItemLabel {
+  position: relative;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Radix uses two labels with different letter-spacing; that shifts text vs the pill. */
+.ui-segmented .rt-SegmentedControlItemLabelInactive,
+.ui-segmented .rt-SegmentedControlItemLabelActive {
+  font-weight: var(--font-weight-medium);
+  letter-spacing: inherit;
+  word-spacing: normal;
+}
+
+.ui-segmented .rt-SegmentedControlItemLabelInactive {
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  margin: 0;
+}
+
+.ui-segmented.ui-segmented--dense.rt-SegmentedControlRoot :where(.rt-SegmentedControlItemLabel) {
+  padding-left: 6px;
+  padding-right: 6px;
+}
+
+.ui-range {
+  margin-top: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ui-range.is-disabled {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+.ui-range-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.ui-range-head .rt-TextFieldRoot {
+  width: 72px;
+}
+
+.ui-check-row,
+.ui-switch-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--gray-a5);
+  border-radius: var(--radius-3);
+  background: var(--color-surface);
+  cursor: pointer;
+}
+
+.ui-switch-row {
+  align-items: center;
+  justify-content: space-between;
+}
+
+.ui-switch-row > span {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  padding-right: 8px;
+}
+
+.ui-check-row:hover,
+.ui-switch-row:hover {
+  background: var(--gray-a2);
+}
+
+.ui-check-row.is-compact {
+  margin-top: 0;
+  padding: 0 2px;
+  border: 0;
+  background: transparent;
+  align-items: center;
+  gap: 6px;
+}
+
+.ui-check-row.is-compact:hover {
+  background: transparent;
+}
+
+.ui-axis-slider {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr) 42px;
+  align-items: center;
+  gap: 8px;
+}
+
+.ui-axis-value {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--gray-11);
+}
+
+.ui-export.rt-BaseButton {
+  width: 100%;
+  height: auto;
+  margin-top: 8px;
+  padding: 10px 12px;
+  justify-content: space-between;
+}
+
+.ui-export-copy {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  text-align: left;
+}
+
+.ui-drop-zone.rt-BaseButton {
+  width: 100%;
+  height: auto;
+  min-height: 112px;
+  padding: 18px 14px;
+  flex-direction: column;
+  gap: 6px;
+  white-space: normal;
+}
+
+.ui-drop-zone.is-dragging {
+  box-shadow: 0 0 0 2px var(--accent-8);
+}
+
+.ui-drop-icon {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 999px;
+  background: var(--accent-a3);
+  color: var(--accent-11);
+  font-size: 18px;
+  font-weight: 400;
+}
+
+.ui-drop-zone strong {
+  max-width: 240px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ui-drop-zone small {
+  max-width: 240px;
+}
+
+.ui-drop-zone small {
+  color: var(--gray-11);
+  font-weight: 400;
+}
+
+.ui-panel-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.ui-preset-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.ui-preset-grid .rt-BaseButton {
+  width: 100%;
+  min-width: 0;
+  justify-content: center;
+}
+
+.app-sheet.rt-DialogContent {
+  display: flex;
+  flex-direction: column;
+  height: min(92vh, 860px);
+  padding: 0;
+  overflow: hidden;
+  background: var(--color-panel-solid);
+}
+
+.app-sheet.rt-DialogContent.is-compact {
+  height: auto;
+  max-height: min(92vh, 640px);
+}
+
+.app-sheet-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 20px 20px 12px;
+}
+
+.app-sheet-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 0 20px 12px;
+}
+
+.app-sheet-tools .rt-TextFieldRoot {
+  flex: 1 1 220px;
+}
+
+.app-sheet-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 4px 20px 20px;
+}
+
+.app-error-body {
+  display: grid;
+  gap: 10px;
+}
+
+.app-error-summary {
+  margin: 0;
+  user-select: text;
+  -webkit-user-select: text;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.app-error-hint {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--gray-a3);
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.app-error-label {
+  font-size: 11px;
+  font-weight: 650;
+  color: var(--gray-11);
+}
+
+.app-error-details {
+  width: 100%;
+  min-height: 180px;
+  max-height: min(42vh, 320px);
+  box-sizing: border-box;
+  padding: 10px 12px;
+  border: 1px solid var(--gray-a6);
+  border-radius: 8px;
+  background: var(--gray-a2);
+  color: inherit;
+  font: 12px/1.45 ui-monospace, Consolas, monospace;
+  resize: vertical;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.app-error-path {
+  margin: 0;
+  color: var(--gray-11);
+  font-size: 11px;
+  word-break: break-all;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.home-tool-card.rt-Card {
+  position: relative;
+  min-height: 220px;
+  cursor: pointer;
+  text-align: left;
+  overflow: hidden;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.home-tool-card.rt-Card::before {
+  content: '';
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 4px;
+  background: var(--accent-9);
+}
+
+.home-tool-card.rt-Card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-5);
+}
+
+.home-tool-card-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  height: 100%;
+  padding: 8px 4px;
+}
+
+.workflow-steps {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--line);
+  background: var(--topbar-glass);
+  backdrop-filter: blur(10px);
+}
+
+.workflow-tab.rt-BaseButton {
+  height: auto;
+  min-height: 52px;
+  padding: 8px 12px;
+  justify-content: flex-start;
+}
+
+.workflow-tab-copy {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  min-width: 0;
+  text-align: left;
+}
+
+.zoom-cluster {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.block-replace-tile.rt-BaseButton {
+  height: auto;
+  min-height: 96px;
+  padding: 10px 8px;
+  flex-direction: column;
+  gap: 6px;
+  white-space: normal;
+}
+
+.block-replace-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 8px;
+}
+
+.block-replace-current-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--gray-a5);
+  border-radius: var(--radius-3);
+  background: var(--color-surface);
+}
+
+.preview-actions .ui-check-row {
+  margin-top: 0;
+  padding: 6px 10px;
+}
+
+.preview-actions .ui-segmented {
+  width: max-content;
+  max-width: 100%;
+  min-width: 0;
+  flex: none;
+}
+
+.preview-actions .ui-segmented .rt-SegmentedControlItem {
+  flex: 0 1 auto;
+  padding-inline: 10px;
+}
+
+/* Shared loader — Classic SpinKit fold + theme bar. */
+.ui-fold {
+  width: 40px;
+  height: 40px;
+  position: relative;
+  transform: rotateZ(45deg);
+}
+
+.ui-fold-cube {
+  float: left;
+  width: 50%;
+  height: 50%;
+  position: relative;
+  transform: scale(1.1);
+}
+
+.ui-fold-cube::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: var(--accent-9, var(--cyan));
+  transform-origin: 100% 100%;
+  animation: ui-fold 2.4s infinite linear both;
+}
+
+.ui-fold-cube:nth-child(2) {
+  transform: scale(1.1) rotateZ(90deg);
+}
+
+.ui-fold-cube:nth-child(3) {
+  transform: scale(1.1) rotateZ(270deg);
+}
+
+.ui-fold-cube:nth-child(4) {
+  transform: scale(1.1) rotateZ(180deg);
+}
+
+.ui-fold-cube:nth-child(2)::before {
+  animation-delay: 0.3s;
+}
+
+.ui-fold-cube:nth-child(4)::before {
+  animation-delay: 0.6s;
+}
+
+.ui-fold-cube:nth-child(3)::before {
+  animation-delay: 0.9s;
+}
+
+@keyframes ui-fold {
+  0%,
+  10% {
+    transform: perspective(140px) rotateX(-180deg);
+    opacity: 0;
+  }
+  25%,
+  75% {
+    transform: perspective(140px) rotateX(0deg);
+    opacity: 1;
+  }
+  90%,
+  100% {
+    transform: perspective(140px) rotateY(180deg);
+    opacity: 0;
+  }
+}
+
+.ui-load {
+  z-index: 8;
+  display: grid;
+  place-items: center;
+  min-width: 0;
+  overflow: hidden;
+  pointer-events: all;
+}
+
+.ui-load--cover {
+  position: absolute;
+  inset: 0;
+  /* Dim the stage; do not blur. Frosted glass washes Lightfall brighter. */
+  background: var(--black-a6);
+}
+
+.ui-load--page {
+  min-height: 100vh;
+  width: 100%;
+  background: transparent;
+}
+
+.ui-load-card {
+  box-sizing: border-box;
+  width: min(300px, calc(100% - 32px));
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  display: grid;
+  justify-items: stretch;
+  gap: 10px;
+  padding: 18px 16px 16px;
+  border: 1px solid var(--line, var(--gray-6));
+  border-radius: var(--radius-3, 10px);
+  background: var(--color-panel-solid, var(--panel));
+  color: var(--text, var(--gray-12));
+  text-align: center;
+}
+
+.ui-load-card .ui-fold {
+  justify-self: center;
+  margin: 4px 0 2px;
+}
+
+.ui-load-title {
+  margin: 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 15px;
+  font-weight: 650;
+}
+
+.ui-load-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+  text-align: left;
+}
+
+.ui-load-heading strong {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.ui-load-pct {
+  flex: none;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  color: var(--accent-11, var(--accent-9, var(--cyan)));
+}
+
+.ui-load-track {
+  height: 8px;
+  overflow: hidden;
+  border-radius: 99px;
+  background: var(--gray-4, var(--track, #2a3440));
+}
+
+.ui-load-fill {
+  height: 100%;
+  width: 100%;
+  border-radius: inherit;
+  background: var(--accent-9, var(--cyan));
+  transform-origin: left center;
+  transform: scaleX(0.02);
+  transition: transform 120ms linear;
+}
+
+.ui-load-track.is-indeterminate .ui-load-fill {
+  width: 38%;
+  transform: none;
+  animation: ui-load-indeterminate 1.15s ease-in-out infinite;
+}
+
+@keyframes ui-load-indeterminate {
+  0% {
+    transform: translateX(-120%);
+  }
+  100% {
+    transform: translateX(280%);
+  }
+}
+
+.ui-load-detail {
+  margin: 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+  color: var(--muted, var(--gray-11));
+  font-size: 11px;
+}

@@ -1,0 +1,227 @@
+<!doctype html>
+<html lang="en" style="background:#04081A;color:#e9ecf2">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#04081A" />
+    <title>StructureLab</title>
+    <style>
+      html, body, #root {
+        width: 100%;
+        min-height: 100%;
+        margin: 0;
+        background: var(--boot-bg, #04081A);
+        color: var(--boot-text, #e9ecf2);
+        font-family: Inter, ui-sans-serif, "Segoe UI", system-ui, sans-serif;
+      }
+      #root {
+        background: transparent;
+      }
+      body {
+        min-height: 100vh;
+        overflow: hidden;
+      }
+      #boot-splash {
+        position: fixed;
+        inset: 0;
+        z-index: 10000;
+        display: grid;
+        place-items: center;
+        background: transparent;
+        opacity: 1;
+        transition: opacity 0.48s ease;
+      }
+      #boot-splash.boot-splash-fade {
+        opacity: 0;
+        pointer-events: none;
+      }
+      #boot-splash.boot-splash-gone {
+        display: none;
+      }
+      #boot-splash .boot-card {
+        width: min(300px, calc(100vw - 48px));
+        display: grid;
+        justify-items: stretch;
+        gap: 10px;
+        padding: 18px 16px 16px;
+        text-align: center;
+        border: 1px solid var(--boot-line, #293140);
+        border-radius: 10px;
+        background: var(--boot-panel, #1b2430);
+        color: var(--boot-text, #e9ecf2);
+      }
+      #boot-splash .ui-fold {
+        width: 40px;
+        height: 40px;
+        position: relative;
+        justify-self: center;
+        margin: 4px 0 2px;
+        transform: rotateZ(45deg);
+      }
+      #boot-splash .ui-fold-cube {
+        float: left;
+        width: 50%;
+        height: 50%;
+        position: relative;
+        transform: scale(1.1);
+      }
+      #boot-splash .ui-fold-cube::before {
+        content: "";
+        position: absolute;
+        inset: 0;
+        background: var(--boot-accent, #3E63DD);
+        transform-origin: 100% 100%;
+        animation: ui-fold 2.4s infinite linear both;
+      }
+      #boot-splash .ui-fold-cube:nth-child(2) { transform: scale(1.1) rotateZ(90deg); }
+      #boot-splash .ui-fold-cube:nth-child(3) { transform: scale(1.1) rotateZ(270deg); }
+      #boot-splash .ui-fold-cube:nth-child(4) { transform: scale(1.1) rotateZ(180deg); }
+      #boot-splash .ui-fold-cube:nth-child(2)::before { animation-delay: 0.3s; }
+      #boot-splash .ui-fold-cube:nth-child(4)::before { animation-delay: 0.6s; }
+      #boot-splash .ui-fold-cube:nth-child(3)::before { animation-delay: 0.9s; }
+      @keyframes ui-fold {
+        0%, 10% { transform: perspective(140px) rotateX(-180deg); opacity: 0; }
+        25%, 75% { transform: perspective(140px) rotateX(0deg); opacity: 1; }
+        90%, 100% { transform: perspective(140px) rotateY(180deg); opacity: 0; }
+      }
+      #boot-splash .boot-brand {
+        margin: 4px 0 2px;
+      }
+      #boot-splash .boot-brand strong {
+        display: block;
+        font-size: 15px;
+        font-weight: 650;
+      }
+      #boot-splash .subtitle {
+        margin-top: 4px;
+        color: var(--boot-muted, #8d98aa);
+        font-size: 11px;
+      }
+      #boot-splash .boot-heading {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 12px;
+        text-align: left;
+      }
+      #boot-splash .label {
+        margin: 0;
+        font-size: 13px;
+        font-weight: 600;
+      }
+      #boot-splash .pct {
+        flex: none;
+        font-size: 12px;
+        font-variant-numeric: tabular-nums;
+        font-weight: 600;
+        color: var(--boot-accent, #3E63DD);
+      }
+      #boot-splash .track {
+        width: 100%;
+        height: 8px;
+        overflow: hidden;
+        border-radius: 99px;
+        background: var(--boot-track, #2a3440);
+      }
+      #boot-splash .fill {
+        height: 100%;
+        width: 100%;
+        border-radius: inherit;
+        background: var(--boot-accent, #3E63DD);
+        transform-origin: left center;
+        transform: scaleX(0.04);
+        transition: transform 0.2s linear;
+      }
+    </style>
+  </head>
+  <body>
+    <script>
+      (function () {
+        var darkText = { text:'#e9ecf2', muted:'#8d98aa', track:'#2a3440', line:'#3c4658' }
+        var lightText = { text:'#11181c', muted:'#5b6670', track:'#dfe3e6', line:'#c1c8cd' }
+        var accents = {
+          indigo:'#3E63DD', blue:'#0090FF', sky:'#00A7E6', cyan:'#00A2C7', teal:'#12A594',
+          jade:'#29A383', green:'#30A46C', grass:'#46A758', mint:'#86EAD4', lime:'#BDEE63',
+          yellow:'#FFE62A', amber:'#FFB224', orange:'#F76B15', gold:'#978365', bronze:'#A18072',
+          brown:'#AD7F58', tomato:'#E54D2E', red:'#E5484D', ruby:'#E54666', crimson:'#E93D82',
+          pink:'#D6409F', plum:'#AB4ABA', purple:'#8E4EC6', violet:'#6E56CF', iris:'#5B5BD6',
+          gray:'#8D99A6'
+        }
+        var themes = {
+          midnight: { bg:'#04081A', panel:'#1B2430', accent:'#3E63DD', ...darkText },
+          ember: { bg:'#140804', panel:'#2A2218', accent:'#FFB224', ...darkText },
+          iris: { bg:'#100818', panel:'#241C2C', accent:'#9B8AFB', ...darkText },
+          dusk: { bg:'#061018', panel:'#18222C', accent:'#00A7E6', ...darkText },
+          moss: { bg:'#06140E', panel:'#18241E', accent:'#29A383', ...darkText },
+          carbon: { bg:'#0C0E12', panel:'#1A1E24', accent:'#8D99A6', ...darkText },
+          paper: { bg:'#D5DEE6', panel:'#E4EBEF', accent:'#0D9B8A', ...lightText },
+          frost: { bg:'#D0E3EA', panel:'#E2F0F4', accent:'#00A7E6', ...lightText },
+          linen: { bg:'#E6DCCE', panel:'#F0E8DC', accent:'#AD7F58', ...lightText },
+          bloom: { bg:'#E8D0DC', panel:'#F2E2EA', accent:'#D6409F', ...lightText }
+        }
+        var id = 'midnight'
+        var t = themes.midnight
+        try { id = localStorage.getItem('structurelab.theme.preset') || id } catch (e) {}
+        try {
+          var splash = JSON.parse(localStorage.getItem('structurelab.theme.splash') || 'null')
+          if (splash && splash.bg && splash.accent) {
+            t = Object.assign({}, splash.appearance === 'light' ? lightText : darkText, {
+              bg: splash.bg,
+              panel: splash.panel,
+              accent: splash.accent
+            })
+          } else {
+            t = themes[id] || themes.midnight
+            if (id === 'custom') {
+              var custom = JSON.parse(localStorage.getItem('structurelab.theme.custom') || '{}')
+              var light = custom.appearance === 'light'
+              t = Object.assign({}, light ? lightText : darkText, {
+                bg: light ? '#D5DEE6' : '#0C0E12',
+                panel: light ? '#E4EBEF' : '#1A1E24',
+                accent: custom.accentHex || accents[custom.accentColor] || accents.indigo
+              })
+            }
+          }
+        } catch (e) {
+          t = themes[id] || themes.midnight
+        }
+        var root = document.documentElement
+        root.style.setProperty('--boot-bg', t.bg)
+        root.style.setProperty('--page-ground', t.bg)
+        root.style.setProperty('--boot-panel', t.panel)
+        root.style.setProperty('--boot-text', t.text)
+        root.style.setProperty('--boot-muted', t.muted)
+        root.style.setProperty('--boot-accent', t.accent)
+        root.style.setProperty('--boot-track', t.track)
+        root.style.setProperty('--boot-line', t.line)
+        root.style.background = t.bg
+        root.style.color = t.text
+        document.querySelector('meta[name="theme-color"]')?.setAttribute('content', t.bg)
+      })()
+    </script>
+    <div id="boot-splash" role="status" aria-live="polite" aria-busy="true">
+      <div class="boot-card">
+        <div class="ui-fold" aria-hidden="true">
+          <div class="ui-fold-cube"></div>
+          <div class="ui-fold-cube"></div>
+          <div class="ui-fold-cube"></div>
+          <div class="ui-fold-cube"></div>
+        </div>
+        <div class="boot-brand">
+          <strong>StructureLab</strong>
+          <div class="subtitle">Map art &amp; model tools for Minecraft</div>
+        </div>
+        <div class="boot-heading">
+          <p class="label" id="boot-splash-label">Starting…</p>
+          <span class="pct" id="boot-splash-pct">4%</span>
+        </div>
+        <div class="track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="4">
+          <div class="fill" id="boot-splash-fill"></div>
+        </div>
+      </div>
+    </div>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
