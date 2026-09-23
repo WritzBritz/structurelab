@@ -1090,64 +1090,66 @@ export default function MapsApp({ onBack }: { onBack: () => void }) {
                       (modern world height).
                     </p>
                   </div>
-                  <CheckRow
-                    checked={options.staircaseHeightAuto}
-                    onChange={(auto) => {
-                      recordBeforeChange()
-                      setOptions((current) => ({
-                        ...current,
-                        staircaseHeightAuto: auto,
-                        maxHeight: auto
-                          ? current.maxHeight
-                          : Math.min(
-                              384,
-                              Math.max(3, stats?.height ?? current.maxHeight ?? 128),
-                            ),
-                      }))
-                    }}
-                  >
-                    Auto height (best quality, soft-capped ~320)
-                  </CheckRow>
-                  <RangeField
-                    label={
-                      options.staircaseHeightAuto
-                        ? 'Optimal height (read-only)'
-                        : 'Maximum build height'
-                    }
-                    value={
-                      options.staircaseHeightAuto
-                        ? Math.min(384, Math.max(3, stats?.height ?? 3))
-                        : options.maxHeight
-                    }
-                    min={3}
-                    max={384}
-                    disabled={options.staircaseHeightAuto}
-                    onChange={(value) => update('maxHeight', value)}
-                    onEditEnd={endCoalesce}
-                  />
-                  <div className="field-hint">
-                    {options.staircaseHeightAuto ? (
-                      stats ? (
-                        <p>
-                          Auto needs <strong>{stats.height}</strong> blocks of stairs
-                          {stats.height >= 320
-                            ? ' (re-planned to stay near world height).'
-                            : ' for this image.'}
-                        </p>
+                  <div className="height-setting">
+                    <CheckRow
+                      checked={options.staircaseHeightAuto}
+                      onChange={(auto) => {
+                        recordBeforeChange()
+                        setOptions((current) => ({
+                          ...current,
+                          staircaseHeightAuto: auto,
+                          maxHeight: auto
+                            ? current.maxHeight
+                            : Math.min(
+                                384,
+                                Math.max(3, stats?.height ?? current.maxHeight ?? 128),
+                              ),
+                        }))
+                      }}
+                    >
+                      Auto height (best quality, soft-capped ~320)
+                    </CheckRow>
+                    <RangeField
+                      label={
+                        options.staircaseHeightAuto
+                          ? 'Optimal height (read-only)'
+                          : 'Maximum build height'
+                      }
+                      value={
+                        options.staircaseHeightAuto
+                          ? Math.min(384, Math.max(3, stats?.height ?? 3))
+                          : options.maxHeight
+                      }
+                      min={3}
+                      max={384}
+                      disabled={options.staircaseHeightAuto}
+                      onChange={(value) => update('maxHeight', value)}
+                      onEditEnd={endCoalesce}
+                    />
+                    <div className="field-hint">
+                      {options.staircaseHeightAuto ? (
+                        stats ? (
+                          <p>
+                            Auto needs <strong>{stats.height}</strong> blocks of stairs
+                            {stats.height >= 320
+                              ? ' (re-planned to stay near world height).'
+                              : ' for this image.'}
+                          </p>
+                        ) : (
+                          <p>Convert once to see how tall Auto would build.</p>
+                        )
                       ) : (
-                        <p>Convert once to see how tall Auto would build.</p>
-                      )
-                    ) : (
-                      <>
-                        <p>
-                          <strong>128</strong> fits modern survival · max <strong>384</strong>.
-                        </p>
-                        <ul className="field-hint-list">
-                          <li>Older worlds (pre-1.18): keep ≤256</li>
-                          <li>If the art needs more, stairs are re-planned (map may shift a little)</li>
-                        </ul>
-                      </>
-                    )}
+                        <>
+                          <p>
+                            <strong>128</strong> fits modern survival · max <strong>384</strong>.
+                          </p>
+                          <ul className="field-hint-list">
+                            <li>Older worlds (pre-1.18): keep ≤256</li>
+                            <li>If the art needs more, stairs are re-planned (map may shift a little)</li>
+                          </ul>
+                        </>
+                      )}
+                    </div>
                   </div>
                   <SelectField
                     label="Height layout"
@@ -1238,41 +1240,6 @@ export default function MapsApp({ onBack }: { onBack: () => void }) {
               )}
           </>
           <SelectField
-            label="Dithering"
-            value={mixMatching ? 'none' : options.dither}
-            disabled={mixMatching}
-            onChange={(value) => update('dither', value as ConvertOptions['dither'])}
-            options={[
-              ['none', 'None'],
-              ['floydSteinberg', 'Floyd–Steinberg'],
-              ['atkinson', 'Atkinson'],
-              ['ordered', 'Ordered 4×4'],
-            ]}
-          />
-          <div className="field-hint">
-            {mixMatching ? (
-              <p>
-                Off while <strong>perceptual mix</strong> is selected — that mode has its own
-                dithering.
-              </p>
-            ) : (
-              <ul className="field-hint-list">
-                <li>
-                  <strong>Floyd–Steinberg</strong> — MapartCraft-style (default)
-                </li>
-                <li>
-                  <strong>Atkinson</strong> — quieter
-                </li>
-                <li>
-                  <strong>Ordered</strong> — patterned
-                </li>
-                <li>
-                  <strong>None</strong> — logos / flat art
-                </li>
-              </ul>
-            )}
-          </div>
-          <SelectField
             label="Colour matching"
             value={options.colourMatching}
             onChange={(value) =>
@@ -1315,6 +1282,41 @@ export default function MapsApp({ onBack }: { onBack: () => void }) {
                 <strong>Oklab + hue guard</strong> — keeps more colour on sparse packs
               </li>
             </ul>
+          </div>
+          <SelectField
+            label="Dithering"
+            value={mixMatching ? 'none' : options.dither}
+            disabled={mixMatching}
+            onChange={(value) => update('dither', value as ConvertOptions['dither'])}
+            options={[
+              ['none', 'None'],
+              ['floydSteinberg', 'Floyd–Steinberg'],
+              ['atkinson', 'Atkinson'],
+              ['ordered', 'Ordered 4×4'],
+            ]}
+          />
+          <div className="field-hint">
+            {mixMatching ? (
+              <p>
+                Off while <strong>perceptual mix</strong> is selected — that mode has its own
+                dithering.
+              </p>
+            ) : (
+              <ul className="field-hint-list">
+                <li>
+                  <strong>Floyd–Steinberg</strong> — MapartCraft-style (default)
+                </li>
+                <li>
+                  <strong>Atkinson</strong> — quieter
+                </li>
+                <li>
+                  <strong>Ordered</strong> — patterned
+                </li>
+                <li>
+                  <strong>None</strong> — logos / flat art
+                </li>
+              </ul>
+            )}
           </div>
 
           <div className="panel-divider" />

@@ -614,6 +614,9 @@ const STATUE_UNSAFE_IDS = new Set([
   'scaffolding',
   'tripwire',
   'tripwire_hook',
+  'barrel',
+  'cauldron',
+  'candle',
 ])
 
 const STATUE_UNSAFE_SUFFIXES = [
@@ -658,11 +661,12 @@ export function isInfestedBlock(state: string): boolean {
   return baseBlockId(state).replace('minecraft:', '').startsWith('infested_')
 }
 
-export function isUnsafeStatueBlock(state: string): boolean {
-  if (isHostAttachedColourBlock(state) || isFluidBlock(state) || isTopFaceColourBlock(state)) {
-    return true
-  }
+export function isUnsafeStatueBlock(state: string, allowAnisotropic = false): boolean {
+  if (isHostAttachedColourBlock(state) || isFluidBlock(state)) return true
   const id = baseBlockId(state).replace('minecraft:', '')
+  // Path and farmland are not full cubes. Logs, grass, and nylium are.
+  if (id === 'dirt_path' || id === 'farmland') return true
+  if (!allowAnisotropic && isTopFaceColourBlock(state)) return true
   if (id.endsWith('_leaves') || id.endsWith('_coral_block') || id.endsWith('_wart_block')) {
     return STATUE_UNSAFE_SUFFIXES.some((suffix) => id.endsWith(suffix))
   }
@@ -812,19 +816,9 @@ export function recommendedStatueCubes(
     }))
 }
 
+/** Palette cubes that can sit as a control row or under carpets. Furniture stays out. */
 export function staircaseSupportChoices(palette: PaletteFile): BlockChoice[] {
-  const choices = new Map<string, BlockChoice>()
-  for (const color of palette.colors.filter((entry) => !entry.transparent && !entry.fluid)) {
-    for (const choice of blockChoices(color)) {
-      const id = choice.id.replace('minecraft:', '')
-      const stableFullBlock =
-        /(?:stone|cobblestone|deepslate|blackstone|bricks|planks|concrete|terracotta|_wool|glass)$/
-          .test(id)
-        && !/(stairs|slab|wall|pane|powder)$/.test(id)
-      if (stableFullBlock) choices.set(choice.id, choice)
-    }
-  }
-  return [...choices.values()].sort((left, right) => left.name.localeCompare(right.name))
+  return allPaletteBlocks(palette).filter((choice) => !isUnsafeStatueBlock(choice.state, true))
 }
 
 export function formatStacks(stacks: number, remainder: number): string {

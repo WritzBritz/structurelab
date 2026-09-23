@@ -1,7 +1,7 @@
 {
   "name": "structurelab",
   "private": true,
-  "version": "0.9.0-beta",
+  "version": "0.9.1-beta",
   "description": "Cross-platform Minecraft desktop app for map art, pixel art, and model voxelization.",
   "license": "MIT",
   "type": "module",

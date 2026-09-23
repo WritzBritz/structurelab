@@ -56,7 +56,7 @@ export function BlockReplaceDialog({
   /** Models: one cube at a time, not a map-colour family. */
   perCube?: boolean
   cubes?: ModelAppearanceCube[]
-  /** Fixed list for support picking (stable full cubes). */
+  /** Fixed list for support picking (palette cubes, without furniture). */
   pool?: BlockChoice[]
 }) {
   const { color, selectedState, enabled } = target
@@ -196,7 +196,6 @@ export function BlockReplaceDialog({
           />
           <Text size="1" color="gray">
             {list.length} block{list.length === 1 ? '' : 's'}
-            {supportMode && ' · stable full cubes for control rows and under-supports'}
             {!supportMode && tab === 'recommended' && (statueSafe
               ? perCube
                 ? ' · nearby cube textures, not map-item shades'

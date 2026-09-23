@@ -158,6 +158,47 @@
   background: transparent;
 }
 
+.height-setting {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+  padding: 10px 12px 12px;
+  border: 1px solid var(--gray-a5);
+  border-radius: var(--radius-3);
+  background: var(--color-surface);
+}
+
+.height-setting > .ui-check-row {
+  margin-top: 0;
+  padding: 0 0 8px;
+  border: 0;
+  border-bottom: 1px solid var(--gray-a4);
+  border-radius: 0;
+  background: transparent;
+}
+
+.height-setting > .ui-check-row:hover {
+  background: transparent;
+}
+
+.height-setting > .ui-range {
+  margin-top: 2px;
+}
+
+.height-setting > .field-hint {
+  margin: 0;
+}
+
+.height-setting > .ui-range.is-disabled {
+  opacity: 1;
+}
+
+.height-setting > .ui-range.is-disabled .rt-SliderRoot,
+.height-setting > .ui-range.is-disabled .rt-TextFieldRoot {
+  opacity: 0.72;
+}
+
 .ui-axis-slider {
   display: grid;
   grid-template-columns: 14px minmax(0, 1fr) 42px;

@@ -1,7 +1,7 @@
 [package]
 name = "structurelab"
 # Keep in sync with package.json (Cargo requires its own version field).
-version = "0.9.0-beta"
+version = "0.9.1-beta"
 description = "StructureLab — map art, pixel art, and model tools for Minecraft"
 authors = ["StructureLab contributors"]
 license = "MIT"
