@@ -7,16 +7,19 @@ import {
   cubeId,
   cubeIsDisabled,
   fluidColorIds,
-  formatStacks,
+  formatMaterialCount,
   friendlyBlockName,
   poorModelColorIds,
   materialCategory,
   materialCategoryLabel,
+  readMaterialCountFormat,
   scrubBlockOverrides,
   scrubBlockSubstitutions,
   scrubSupportBlock,
   STATUE_MATERIAL_PRESET_META,
   staircaseSupportChoices,
+  writeMaterialCountFormat,
+  type MaterialCountFormat,
   type StatueMaterialPreset,
 } from '../../materials'
 import { litematicExportFormat, litematicSchematicVersion, subscribeMinecraftVersion } from '../../minecraftVersion'
@@ -361,6 +364,9 @@ export default function ModelsApp({ onBack }: { onBack: () => void }) {
   const [paletteSearch, setPaletteSearch] = useState('')
   const [modelCubes, setModelCubes] = useState<ModelAppearanceCube[]>([])
   const [materialSearch, setMaterialSearch] = useState('')
+  const [materialCountFormat, setMaterialCountFormat] = useState<MaterialCountFormat>(() =>
+    readMaterialCountFormat(),
+  )
   const [activePreset, setActivePreset] = useState<StatueMaterialPreset | 'custom'>('everything')
   const [replaceTarget, setReplaceTarget] = useState<BlockReplaceTarget | null>(null)
   const [previewStyle, setPreviewStyle] = useState<VoxelPreviewStyle>('textures')
@@ -3742,7 +3748,19 @@ export default function ModelsApp({ onBack }: { onBack: () => void }) {
       const ok = await runVoxelize()
       if (!ok) return
     }
-    await runExport(format, setStatus, result?.build)
+    await runExport(format, setStatus, result?.build, {
+      begin: (label) => {
+        setBusy(true)
+        setLoadProgress({ ratio: 0.02, label })
+      },
+      progress: (ratio, label) => {
+        setLoadProgress({ ratio, label })
+      },
+      end: () => {
+        setBusy(false)
+        setLoadProgress(null)
+      },
+    })
   }
 
   const selectedPartIndex = selected
@@ -3909,6 +3927,30 @@ export default function ModelsApp({ onBack }: { onBack: () => void }) {
   function renderUsedBlocksList(emptyLabel: string) {
     return (
       <>
+        <div
+          className="material-count-format"
+          title="How amounts are shown — Auto matches Litematica (stacks, then SB when ≥1 shulker)"
+        >
+          <Segmented
+            size="1"
+            value={materialCountFormat}
+            onChange={(next) => {
+              const format = next as MaterialCountFormat
+              setMaterialCountFormat(format)
+              writeMaterialCountFormat(format)
+            }}
+            options={[
+              { value: 'count', label: 'Count', title: 'Raw block total only' },
+              {
+                value: 'auto',
+                label: 'Auto',
+                title: 'Litematica style: stacks under 1 shulker, then X.XX SB',
+              },
+              { value: 'stacks', label: 'Stacks', title: 'Always show stacks × 64 + leftover' },
+              { value: 'shulkers', label: 'SB', title: 'Fractional shulker boxes (1 SB = 1,728)' },
+            ]}
+          />
+        </div>
         {usedBlocks.length > 8 && (
           <div className="material-tools material-tools-search">
             <input
@@ -3921,6 +3963,7 @@ export default function ModelsApp({ onBack }: { onBack: () => void }) {
         )}
         <div className="material-list material-list-clean">
           {visibleUsedBlocks.map((row) => {
+            const amount = formatMaterialCount(row.count, materialCountFormat)
             return (
               <button
                 type="button"
@@ -3942,16 +3985,14 @@ export default function ModelsApp({ onBack }: { onBack: () => void }) {
                 <BlockIcon block={row.block} color={row.rgb} />
                 <span className="material-row-copy" title={row.block}>
                   <b>{friendlyBlockName(row.block)}</b>
-                  <small>
-                    {row.category}
-                    {' · '}
-                    {formatStacks(row.stacks, row.remainder)}
-                  </small>
+                  <small>{row.isSupport ? 'Support' : row.category}</small>
                 </span>
-                {row.editable ? (
-                  <strong>{row.count.toLocaleString()}</strong>
+                {row.editable || row.isSupport ? (
+                  <strong className="material-row-amount" title={`${row.count.toLocaleString()} blocks`}>
+                    {amount}
+                  </strong>
                 ) : (
-                  <em>{row.isSupport ? 'Support' : 'Other'}</em>
+                  <em>Other</em>
                 )}
               </button>
             )
@@ -5342,6 +5383,7 @@ export default function ModelsApp({ onBack }: { onBack: () => void }) {
               )}
             </div>
           </div>
+          <div className="preview-canvas-shell">
           <div
             className={`canvas-frame voxel-frame ${viewportMode === 'empty' ? 'empty' : ''} ${
               viewportMode === 'mesh' ? 'mesh-opaque' : ''
@@ -5433,8 +5475,9 @@ export default function ModelsApp({ onBack }: { onBack: () => void }) {
                 <Button onClick={() => void pickSourcesViaDialog('models')}>Add sources</Button>
               </div>
             )}
+          </div>
             {(busy || loadProgress) && (
-              <LoadOverlay {...overlayFromProgress(loadProgress, 'Converting to voxels…')} />
+              <LoadOverlay {...overlayFromProgress(loadProgress, busy ? 'Working…' : 'Converting to voxels…')} />
             )}
           </div>
           {viewportMode === 'voxels' && result && (
@@ -6210,7 +6253,12 @@ function ObjectTabStrip({
 async function runExport(
   format: ExportFormat,
   setStatus: (status: string) => void,
-  build?: { minecraftVersion?: string; dataVersion?: number },
+  build: { minecraftVersion?: string; dataVersion?: number } | undefined,
+  onBusy: {
+    begin: (label: string) => void
+    progress: (ratio: number, label: string) => void
+    end: () => void
+  },
 ) {
   try {
     setStatus(
@@ -6221,6 +6269,11 @@ async function runExport(
     const saved = await saveExport(format, {
       minecraftVersion: build?.minecraftVersion,
       dataVersion: build?.dataVersion,
+      onStart: () => onBusy.begin('Exporting…'),
+      onProgress: (ratio, label) => {
+        onBusy.progress(ratio, label)
+        setStatus(label)
+      },
     })
     setStatus(
       saved
@@ -6231,5 +6284,7 @@ async function runExport(
     )
   } catch (error) {
     setStatus(statusFromError('Export failed', error, { operation: 'export schematic' }))
+  } finally {
+    onBusy.end()
   }
 }

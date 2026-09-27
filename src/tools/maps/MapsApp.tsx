@@ -1,6 +1,7 @@
 import { lazy, Suspense, startTransition, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Button, Checkbox, IconButton, Text } from '@radix-ui/themes'
-import { convert, loadPalette, saveExport } from '../../api'
+import { convert, loadMapPreviewVoxels, loadPalette, saveExport } from '../../api'
+import { convertFileSrc } from '@tauri-apps/api/core'
 import { BlockIcon } from '../../components/BlockIcon'
 import { BlockReplaceDialog, type BlockReplaceTarget } from '../../components/BlockReplaceDialog'
 import MinecraftVersionSelect from '../../components/MinecraftVersionSelect'
@@ -12,8 +13,10 @@ import { CopyableNotice, TopbarStatus } from '../../components/AppErrorHost'
 import { statusFromError } from '../../appError'
 import {
   applyMaterialPreset,
+  baseBlockId,
   blockChoices,
   fluidColorIds,
+  formatMaterialCount,
   friendlyBlockName,
   friendlyMapColorLabel,
   isHostAttachedColourBlock,
@@ -22,9 +25,12 @@ import {
   materialCategory,
   materialCategoryLabel,
   matchesMaterialSearch,
+  readMaterialCountFormat,
   scrubBlockOverrides,
   scrubSupportBlock,
   staircaseSupportChoices,
+  writeMaterialCountFormat,
+  type MaterialCountFormat,
   type MaterialPreset,
 } from '../../materials'
 import { litematicExportFormat, litematicSchematicVersion, subscribeMinecraftVersion } from '../../minecraftVersion'
@@ -100,6 +106,18 @@ const MATERIAL_PRESETS: [MaterialPreset, string][] = [
   ['terracotta', 'Terracotta'],
 ]
 
+type MapsUsedMaterialRow = {
+  key: string
+  block: string
+  count: number
+  stacks: number
+  remainder: number
+  label: string
+  rgb?: [number, number, number]
+  colorId?: number
+  kind: 'color' | 'support' | 'other'
+}
+
 export default function MapsApp({ onBack }: { onBack: () => void }) {
   const [palette, setPalette] = useState<PaletteFile | null>(null)
   const [imageBytes, setImageBytes] = useState<Uint8Array | null>(null)
@@ -107,6 +125,7 @@ export default function MapsApp({ onBack }: { onBack: () => void }) {
   const [fileName, setFileName] = useState('')
   const [options, setOptions] = useState<ConvertOptions>(defaultOptions)
   const [result, setResult] = useState<ConversionResponse | null>(null)
+  const [litematicMapSubregions, setLitematicMapSubregions] = useState(false)
   const [status, setStatus] = useState('Drop an image to begin')
   const [busy, setBusy] = useState(false)
   const [loadProgress, setLoadProgress] = useState<{
@@ -122,6 +141,9 @@ export default function MapsApp({ onBack }: { onBack: () => void }) {
   const [activePreset, setActivePreset] = useState<MaterialPreset | 'custom'>('all')
   const [replaceTarget, setReplaceTarget] = useState<BlockReplaceTarget | null>(null)
   const [materialSearch, setMaterialSearch] = useState('')
+  const [materialCountFormat, setMaterialCountFormat] = useState<MaterialCountFormat>(() =>
+    readMaterialCountFormat(),
+  )
   const [compare, setCompare] = useState(false)
   const [previewView, setPreviewView] = useState<PreviewView>('2d')
   const [map2dStyle, setMap2dStyle] = useState<Map2dStyle>('mapColors')
@@ -130,6 +152,7 @@ export default function MapsApp({ onBack }: { onBack: () => void }) {
   const [draggingPreview, setDraggingPreview] = useState(false)
   const [textureWarnings, setTextureWarnings] = useState<string[]>([])
   const [textureCacheEpoch, setTextureCacheEpoch] = useState(() => getTextureCacheEpoch())
+  const [voxelsLoading, setVoxelsLoading] = useState(false)
   const fileInput = useRef<HTMLInputElement>(null)
   const previewFrame = useRef<HTMLDivElement>(null)
   const mapImage = useRef<HTMLDivElement>(null)
@@ -379,10 +402,46 @@ export default function MapsApp({ onBack }: { onBack: () => void }) {
     }
   }, [result, textureCacheEpoch, imageBytes])
 
+  // Large converts defer 3D voxel packing — load only when the user opens 3D.
+  useEffect(() => {
+    if (previewView !== '3d' || !result) return
+    if ((result.previewVoxelStride ?? 1) !== 0) return
+    if (result.previewVoxels) return
+    let cancelled = false
+    setVoxelsLoading(true)
+    setStatus('Loading 3D preview…')
+    void loadMapPreviewVoxels()
+      .then((packed) => {
+        if (cancelled) return
+        setResult((current) =>
+          current
+            ? {
+                ...current,
+                previewBlockPalette: packed.previewBlockPalette,
+                previewVoxels: packed.previewVoxels,
+                previewVoxelStride: packed.previewVoxelStride,
+              }
+            : current,
+        )
+        setStatus('Ready to export')
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return
+        setStatus(statusFromError('3D preview failed', error, { operation: 'load 3D preview' }))
+      })
+      .finally(() => {
+        if (!cancelled) setVoxelsLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [previewView, result?.previewVoxelStride, result?.previewVoxels])
+
   useEffect(() => {
     if (!imageBytes) {
       setBusy(false)
       setConvertPending(false)
+      setLoadProgress(null)
       return
     }
     const generation = ++convertGenerationRef.current
@@ -391,12 +450,19 @@ export default function MapsApp({ onBack }: { onBack: () => void }) {
       if (generation !== convertGenerationRef.current) return
       convertInflightRef.current += 1
       setBusy(true)
+      setLoadProgress({ ratio: 0.02, label: 'Preparing image…' })
       setStatus('Solving map colors and structure…')
-      convert(imageBytes, options)
+      convert(imageBytes, options, (ratio, label) => {
+        if (generation !== convertGenerationRef.current) return
+        setLoadProgress({ ratio, label })
+        setStatus(label)
+      })
         .then((next) => {
           if (generation !== convertGenerationRef.current) return
-          setResult(next)
-          setTextureWarnings([])
+          startTransition(() => {
+            setResult(next)
+            setTextureWarnings([])
+          })
           setStatus('Ready to export')
           // Side-effects from convert — skip while restoring history.
           if (isRestoring()) return
@@ -435,7 +501,10 @@ export default function MapsApp({ onBack }: { onBack: () => void }) {
         })
         .finally(() => {
           convertInflightRef.current = Math.max(0, convertInflightRef.current - 1)
-          if (convertInflightRef.current === 0) setBusy(false)
+          if (convertInflightRef.current === 0) {
+            setBusy(false)
+            setLoadProgress(null)
+          }
           if (generation === convertGenerationRef.current) setConvertPending(false)
         })
     }, 280)
@@ -563,13 +632,89 @@ export default function MapsApp({ onBack }: { onBack: () => void }) {
   }
 
   const stats = result?.build
+  const previewColourSrc = useMemo(() => {
+    if (!result) return ''
+    const staged = result.previewImagePath?.trim()
+    if (staged) {
+      try {
+        // Bust asset-protocol cache if a path is ever reused across converts.
+        const bust =
+          result.previewSurfaceIndices.length
+          || result.build.materials.length
+          || result.build.height
+        return `${convertFileSrc(staged)}?v=${bust}`
+      } catch {
+        /* fall through to data URL */
+      }
+    }
+    return result.previewDataUrl || ''
+  }, [result])
   const shadingModes = mapShadingModesAvailable(options)
+  /** Every placed block from the last convert — includes staircase / gravity support. */
+  const usedBuildMaterials = useMemo(() => {
+    if (!result) return [] as MapsUsedMaterialRow[]
+    const supportId = baseBlockId(options.staircaseSupportBlock)
+    const colorByBlock = new Map<
+      string,
+      { colorId: number; label: string; rgb: [number, number, number]; block: string }
+    >()
+    for (const color of palette?.colors ?? []) {
+      if (color.transparent) continue
+      if (options.disabledColorIds.includes(color.id)) continue
+      const block = options.blockOverrides[color.id] ?? color.block
+      const id = baseBlockId(block)
+      if (colorByBlock.has(id)) continue
+      colorByBlock.set(id, {
+        colorId: color.id,
+        label: friendlyMapColorLabel(color),
+        rgb: color.rgb,
+        block,
+      })
+    }
+    return result.build.materials
+      .slice()
+      .sort((a, b) => {
+        if (b.count !== a.count) return b.count - a.count
+        return friendlyBlockName(a.block).localeCompare(friendlyBlockName(b.block))
+      })
+      .map((material) => {
+        const id = baseBlockId(material.block)
+        const color = colorByBlock.get(id)
+        const isSupport = id === supportId
+        const kind: MapsUsedMaterialRow['kind'] = color
+          ? 'color'
+          : isSupport
+            ? 'support'
+            : 'other'
+        return {
+          key: material.block,
+          block: material.block,
+          count: material.count,
+          stacks: material.stacks,
+          remainder: material.remainder,
+          label:
+            kind === 'support'
+              ? 'Support'
+              : color?.label ?? materialCategoryLabel(materialCategory(material.block)),
+          rgb: color?.rgb,
+          colorId: color?.colorId,
+          kind,
+        } satisfies MapsUsedMaterialRow
+      })
+  }, [
+    palette,
+    options.disabledColorIds,
+    options.blockOverrides,
+    options.staircaseSupportBlock,
+    result,
+  ])
   const usedColourBlocks = useMemo(() => {
     if (!palette) return []
     const counts = new Map<string, number>()
     for (const material of result?.build.materials ?? []) {
-      counts.set(material.block, material.count)
+      counts.set(baseBlockId(material.block), material.count)
     }
+    const usedIds = new Set(usedBuildMaterials.map((row) => baseBlockId(row.block)))
     const rows: {
       colorId: number
       label: string
@@ -581,22 +726,31 @@ export default function MapsApp({ onBack }: { onBack: () => void }) {
       if (color.transparent) continue
       if (options.disabledColorIds.includes(color.id)) continue
       const block = options.blockOverrides[color.id] ?? color.block
+      const id = baseBlockId(block)
+      // Used blocks are listed from the real materials list (incl. support).
+      if (usedIds.has(id) && (counts.get(id) ?? 0) > 0) continue
       rows.push({
         colorId: color.id,
         label: friendlyMapColorLabel(color),
         block,
         rgb: color.rgb,
-        count: counts.get(block) ?? null,
+        count: null,
       })
     }
-    rows.sort((a, b) => {
-      const ca = a.count ?? -1
-      const cb = b.count ?? -1
-      if (ca !== cb) return cb - ca
-      return a.label.localeCompare(b.label)
-    })
+    rows.sort((a, b) => a.label.localeCompare(b.label))
     return rows
-  }, [palette, options.disabledColorIds, options.blockOverrides, result])
+  }, [palette, options.disabledColorIds, options.blockOverrides, result, usedBuildMaterials])
+  const visibleUsedMaterials = useMemo(() => {
+    const query = materialSearch.trim().toLowerCase()
+    if (!query) return usedBuildMaterials
+    return usedBuildMaterials.filter(
+      (row) =>
+        friendlyBlockName(row.block).toLowerCase().includes(query)
+        || row.block.toLowerCase().includes(query)
+        || row.label.toLowerCase().includes(query)
+        || (row.kind === 'support' && 'support'.includes(query)),
+    )
+  }, [usedBuildMaterials, materialSearch])
   const visibleColourBlocks = useMemo(() => {
     const query = materialSearch.trim().toLowerCase()
     if (!query) return usedColourBlocks
@@ -606,18 +760,12 @@ export default function MapsApp({ onBack }: { onBack: () => void }) {
       || row.label.toLowerCase().includes(query),
     )
   }, [usedColourBlocks, materialSearch])
-  const usedVisibleColourBlocks = useMemo(
-    () => visibleColourBlocks.filter((row) => row.count != null),
-    [visibleColourBlocks],
-  )
-  const otherVisibleColourBlocks = useMemo(
-    () => visibleColourBlocks.filter((row) => row.count == null),
-    [visibleColourBlocks],
-  )
+  const usedVisibleColourBlocks = visibleUsedMaterials
+  const otherVisibleColourBlocks = visibleColourBlocks
   const paletteRows = useMemo(() => {
     const counts = new Map<string, number>()
     for (const material of result?.build.materials ?? []) {
-      counts.set(material.block, material.count)
+      counts.set(baseBlockId(material.block), material.count)
     }
     return (palette?.colors ?? [])
       .filter((color) => !color.transparent)
@@ -631,7 +779,7 @@ export default function MapsApp({ onBack }: { onBack: () => void }) {
           matchesMaterialSearch(choice, paletteSearch),
         )
         const colorMatches = mapColorMatchesSearch(color, paletteSearch)
-        const usedCount = counts.get(selected) ?? 0
+        const usedCount = counts.get(baseBlockId(selected)) ?? 0
         return {
           color,
           selected,
@@ -659,6 +807,23 @@ export default function MapsApp({ onBack }: { onBack: () => void }) {
   const supportChoices = useMemo(
     () => (palette ? staircaseSupportChoices(palette) : []),
     [palette],
+  )
+
+  const exportBusy = useMemo(
+    () => ({
+      begin: (label: string) => {
+        setBusy(true)
+        setLoadProgress({ ratio: 0.02, label })
+      },
+      progress: (ratio: number, label: string) => {
+        setLoadProgress({ ratio, label })
+      },
+      end: () => {
+        setBusy(false)
+        setLoadProgress(null)
+      },
+    }),
+    [],
   )
 
   function setVisibleColors(enabled: boolean) {
@@ -1484,6 +1649,7 @@ export default function MapsApp({ onBack }: { onBack: () => void }) {
               )}
             </div>
           </div>
+          <div className="preview-canvas-shell">
           <div
             ref={previewFrame}
             className={`canvas-frame ${!result ? 'empty' : ''} ${
@@ -1539,12 +1705,15 @@ export default function MapsApp({ onBack }: { onBack: () => void }) {
             }}
           >
             {result && previewView === '3d' ? (
+              voxelsLoading || ((result.previewVoxelStride ?? 1) === 0 && !result.previewVoxels) ? (
+                <LoadOverlay label="Loading 3D preview…" indeterminate />
+              ) : (
               <Suspense fallback={<LoadOverlay label="Loading 3D preview…" indeterminate />}>
                 <MapArt3DViewer
                   key={`map3d-${textureCacheEpoch}`}
                   previewBlockPalette={result.previewBlockPalette ?? []}
                   previewVoxels={result.previewVoxels ?? ''}
-                  previewVoxelStride={result.previewVoxelStride ?? 1}
+                  previewVoxelStride={result.previewVoxelStride || 1}
                   width={result.build.width}
                   length={result.build.length}
                   height={result.build.height}
@@ -1561,6 +1730,7 @@ export default function MapsApp({ onBack }: { onBack: () => void }) {
                   }}
                 />
               </Suspense>
+              )
             ) : (
               <div className="canvas-center">
                 {result && compare ? (
@@ -1595,8 +1765,9 @@ export default function MapsApp({ onBack }: { onBack: () => void }) {
                       }
                     >
                       <img
-                        src={result.previewDataUrl}
+                        src={previewColourSrc}
                         alt="Minecraft map-item colour preview"
+                        decoding="async"
                       />
                       <div className="map-grid" />
                     </div>
@@ -1616,7 +1787,7 @@ export default function MapsApp({ onBack }: { onBack: () => void }) {
                           } as React.CSSProperties
                         }
                       >
-                        <img src={result.previewDataUrl} alt="Minecraft map-color preview" />
+                        <img src={previewColourSrc} alt="Minecraft map-color preview" decoding="async" />
                         <div className="map-grid" />
                       </div>
                     }
@@ -1631,7 +1802,7 @@ export default function MapsApp({ onBack }: { onBack: () => void }) {
                       zoom={zoom}
                       previewSurfacePalette={result.previewSurfacePalette ?? []}
                       previewSurfaceIndices={result.previewSurfaceIndices ?? ''}
-                      previewDataUrl={result.previewDataUrl}
+                      previewDataUrl={previewColourSrc}
                     />
                   </Suspense>
                   )
@@ -1645,8 +1816,9 @@ export default function MapsApp({ onBack }: { onBack: () => void }) {
                 )}
               </div>
             )}
+          </div>
             {(busy || loadProgress) && (
-              <LoadOverlay {...overlayFromProgress(loadProgress, 'Building preview')} />
+              <LoadOverlay {...overlayFromProgress(loadProgress, busy ? 'Exporting…' : 'Building preview')} />
             )}
           </div>
           {result && (
@@ -1705,11 +1877,32 @@ export default function MapsApp({ onBack }: { onBack: () => void }) {
             <strong>Blocks in this map</strong>
             <span>
               {result
-                ? `${usedVisibleColourBlocks.length} used`
-                : visibleColourBlocks.length}
+                ? `${usedBuildMaterials.length} used`
+                : otherVisibleColourBlocks.length}
             </span>
           </div>
-          {usedColourBlocks.length > 8 && (
+          <div className="material-count-format" title="How amounts are shown — Auto matches Litematica (stacks, then SB when ≥1 shulker)">
+            <Segmented
+              size="1"
+              value={materialCountFormat}
+              onChange={(next) => {
+                const format = next as MaterialCountFormat
+                setMaterialCountFormat(format)
+                writeMaterialCountFormat(format)
+              }}
+              options={[
+                { value: 'count', label: 'Count', title: 'Raw block total only' },
+                {
+                  value: 'auto',
+                  label: 'Auto',
+                  title: 'Litematica style: stacks under 1 shulker, then X.XX SB',
+                },
+                { value: 'stacks', label: 'Stacks', title: 'Always show stacks × 64 + leftover' },
+                { value: 'shulkers', label: 'SB', title: 'Fractional shulker boxes (1 SB = 1,728)' },
+              ]}
+            />
+          </div>
+          {(usedBuildMaterials.length > 8 || otherVisibleColourBlocks.length > 8) && (
             <div className="material-tools">
               <SearchField
                 placeholder="Filter…"
@@ -1726,11 +1919,22 @@ export default function MapsApp({ onBack }: { onBack: () => void }) {
                   <b>{usedVisibleColourBlocks.length}</b>
                 </div>
                 {usedVisibleColourBlocks.map((row) => (
-                  <MapsColourBlockRow
-                    key={row.colorId}
+                  <MapsUsedMaterialRowView
+                    key={row.key}
                     row={row}
+                    countFormat={materialCountFormat}
                     onPick={() => {
-                      const color = palette?.colors.find((entry) => entry.id === row.colorId)
+                      if (row.kind === 'support') {
+                        setReplaceTarget({
+                          kind: 'support',
+                          selectedState: options.staircaseSupportBlock,
+                          sourceState: 'minecraft:cobblestone',
+                          enabled: true,
+                        })
+                        return
+                      }
+                      if (row.kind !== 'color' || row.colorId == null || !palette) return
+                      const color = palette.colors.find((entry) => entry.id === row.colorId)
                       if (!color) return
                       setReplaceTarget({
                         color,
@@ -1765,7 +1969,7 @@ export default function MapsApp({ onBack }: { onBack: () => void }) {
                 ))}
               </>
             )}
-            {visibleColourBlocks.length === 0 && (
+            {usedVisibleColourBlocks.length === 0 && otherVisibleColourBlocks.length === 0 && (
               <div className="material-empty">
                 {imageBytes
                   ? 'No colours enabled — open Edit colours.'
@@ -1786,38 +1990,88 @@ export default function MapsApp({ onBack }: { onBack: () => void }) {
               title="All formats bundle"
               detail=".zip · recommended"
               primary
-              disabled={!result || convertPending}
-              onClick={() => void runExport('all', setStatus, result?.build)}
+              disabled={!result || convertPending || busy}
+              onClick={() =>
+                void runExport('all', setStatus, result?.build, litematicMapSubregions, exportBusy)
+              }
             />
             <ExportButton
               title="Vanilla structure"
               detail=".nbt · unsplit"
-              disabled={!result || convertPending}
-              onClick={() => void runExport('vanillaNbt', setStatus, result?.build)}
+              disabled={!result || convertPending || busy}
+              onClick={() =>
+                void runExport(
+                  'vanillaNbt',
+                  setStatus,
+                  result?.build,
+                  litematicMapSubregions,
+                  exportBusy,
+                )
+              }
             />
             <ExportButton
               title="Vanilla structure pieces"
               detail=".zip · Structure Block safe"
-              disabled={!result || convertPending}
-              onClick={() => void runExport('vanillaSplit', setStatus, result?.build)}
+              disabled={!result || convertPending || busy}
+              onClick={() =>
+                void runExport(
+                  'vanillaSplit',
+                  setStatus,
+                  result?.build,
+                  litematicMapSubregions,
+                  exportBusy,
+                )
+              }
             />
+            {result && (result.build.mapsX > 1 || result.build.mapsY > 1) && (
+              <>
+                <CheckRow
+                  checked={litematicMapSubregions}
+                  onChange={setLitematicMapSubregions}
+                >
+                  Split maps into Litematica sub-regions
+                </CheckRow>
+                <div className="field-hint">
+                  <p>
+                    On: each 128×128 map becomes its own named region (
+                    <strong>Map_C0_R0</strong>, …). Off: one region for the whole schematic.
+                    Applies to Litematica and the all-formats zip. Very large Off exports may fail —
+                    turn this on to export them.
+                  </p>
+                </div>
+              </>
+            )}
             <ExportButton
               title="Litematica"
-              detail={`.litematic · v${litematicSchematicVersion(result?.build.dataVersion ?? 0)}`}
-              disabled={!result || convertPending}
+              detail={
+                litematicMapSubregions && result && (result.build.mapsX > 1 || result.build.mapsY > 1)
+                  ? `.litematic · v${litematicSchematicVersion(result.build.dataVersion ?? 0)} · per-map regions`
+                  : `.litematic · v${litematicSchematicVersion(result?.build.dataVersion ?? 0)}`
+              }
+              disabled={!result || convertPending || busy}
               onClick={() =>
                 void runExport(
                   litematicExportFormat(result?.build.dataVersion ?? 0),
                   setStatus,
                   result?.build,
+                  litematicMapSubregions,
+                  exportBusy,
                 )
               }
             />
             <ExportButton
               title="WorldEdit / FAWE"
               detail=".schem · Sponge v3"
-              disabled={!result || convertPending}
-              onClick={() => void runExport('spongeV3', setStatus, result?.build)}
+              disabled={!result || convertPending || busy}
+              onClick={() =>
+                void runExport(
+                  'spongeV3',
+                  setStatus,
+                  result?.build,
+                  litematicMapSubregions,
+                  exportBusy,
+                )
+              }
             />
           </div>
         </aside>
@@ -1866,6 +2120,7 @@ export default function MapsApp({ onBack }: { onBack: () => void }) {
                   selected={row.selected}
                   usedCount={row.usedCount}
                   enabled={!options.disabledColorIds.includes(row.color.id)}
+                  countFormat={materialCountFormat}
                   onToggle={() => toggleColor(row.color)}
                   onChange={() =>
                     setReplaceTarget({
@@ -1891,6 +2146,7 @@ export default function MapsApp({ onBack }: { onBack: () => void }) {
                   selected={row.selected}
                   usedCount={row.usedCount}
                   enabled={!options.disabledColorIds.includes(row.color.id)}
+                  countFormat={materialCountFormat}
                   onToggle={() => toggleColor(row.color)}
                   onChange={() =>
                     setReplaceTarget({
@@ -1953,6 +2209,47 @@ export default function MapsApp({ onBack }: { onBack: () => void }) {
   )
 }
 
+function MapsUsedMaterialRowView({
+  row,
+  countFormat,
+  onPick,
+}: {
+  row: MapsUsedMaterialRow
+  countFormat: MaterialCountFormat
+  onPick: () => void
+}) {
+  const editable = row.kind === 'color' || row.kind === 'support'
+  const amount = formatMaterialCount(row.count, countFormat)
+  return (
+    <button
+      type="button"
+      className="material-row material-row-pick"
+      onClick={onPick}
+      disabled={!editable}
+      title={
+        row.kind === 'support'
+          ? 'Change support block'
+          : row.kind === 'color'
+            ? 'Change block'
+            : 'Placed in this build'
+      }
+    >
+      <BlockIcon block={row.block} color={row.rgb} />
+      <span className="material-row-copy" title={row.block}>
+        <b>{friendlyBlockName(row.block)}</b>
+        <small>{row.label}</small>
+      </span>
+      {editable ? (
+        <strong className="material-row-amount" title={`${row.count.toLocaleString()} blocks`}>
+          {amount}
+        </strong>
+      ) : (
+        <em>Other</em>
+      )}
+    </button>
+  )
+}
+
 function MapsColourBlockRow({
   row,
   onPick,
@@ -1978,11 +2275,7 @@ function MapsColourBlockRow({
         <b>{friendlyBlockName(row.block)}</b>
         <small>{row.label}</small>
       </span>
-      {row.count != null ? (
-        <strong>{row.count.toLocaleString()}</strong>
-      ) : (
-        <em>Change</em>
-      )}
+      <em>Change</em>
     </button>
   )
 }
@@ -1994,6 +2287,7 @@ function MapColourCard({
   enabled,
   onToggle,
   onChange,
+  countFormat,
 }: {
   color: MapColor
   selected: string
@@ -2001,6 +2295,7 @@ function MapColourCard({
   enabled: boolean
   onToggle: () => void
   onChange: () => void
+  countFormat: MaterialCountFormat
 }) {
   const isCustom = selected !== color.block
   const colorLabel = friendlyMapColorLabel(color)
@@ -2028,7 +2323,7 @@ function MapColourCard({
         </div>
         <div className="map-color-card-meta">
           {usedCount > 0
-            ? `${usedCount.toLocaleString()} in this build`
+            ? formatMaterialCount(usedCount, countFormat)
             : materialCategoryLabel(materialCategory(selected))}
         </div>
         <div className="trait-pills map-color-card-traits">
@@ -2052,7 +2347,13 @@ function SummaryStat({ label, value }: { label: string; value: string }) {
 async function runExport(
   format: ExportFormat,
   setStatus: (status: string) => void,
-  build?: { minecraftVersion?: string; dataVersion?: number },
+  build: { minecraftVersion?: string; dataVersion?: number } | undefined,
+  litematicMapSubregions: boolean,
+  onBusy: {
+    begin: (label: string) => void
+    progress: (ratio: number, label: string) => void
+    end: () => void
+  },
 ) {
   try {
     setStatus(
@@ -2063,6 +2364,12 @@ async function runExport(
     const saved = await saveExport(format, {
       minecraftVersion: build?.minecraftVersion,
       dataVersion: build?.dataVersion,
+      litematicMapSubregions,
+      onStart: () => onBusy.begin('Exporting…'),
+      onProgress: (ratio, label) => {
+        onBusy.progress(ratio, label)
+        setStatus(label)
+      },
     })
     setStatus(
       saved
@@ -2073,5 +2380,7 @@ async function runExport(
     )
   } catch (error) {
     setStatus(statusFromError('Export failed', error, { operation: 'export schematic' }))
+  } finally {
+    onBusy.end()
   }
 }

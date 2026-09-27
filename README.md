@@ -18,9 +18,11 @@ Wavefront `.mtl` · textures PNG / JPEG / WebP / BMP / GIF / TGA / TIFF · Unity
 **Structure export**  
 Vanilla `.nbt` · Structure Block 48×48×48 piece bundles (`.zip`) · Litematica `.litematic` (v6 on 1.20–1.20.4, v7 on 1.20.6+; chosen from that version’s DataVersion) · Sponge v3 `.schem` (WorldEdit / FAWE) · all of the above in one `.zip`
 
+Multi-map Litematica exports can optionally **split each 128×128 map into its own named sub-region** (`Map_C0_R0`, …). Off keeps one region for the whole schematic (very large Off exports may fail — turn the toggle on to export them).
+
 ## Tools
 
-- **Maps** — turn images into **map art** (Minecraft map-item colours, multi-map mosaics, floor only, flat or staircase) or **pixel art** (in-world cubes, one block deep, floor or wall)
+- **Maps** — turn images into **map art** (Minecraft map-item colours, multi-map mosaics, floor only, flat or staircase) or **pixel art** (in-world cubes, one block deep, floor or wall). Convert and export show real progress; large mosaics keep the preview responsive (staged colour preview, deferred 3D voxels).
 - **Models** — import meshes, skins, and the Minecraft entity catalog; pose / voxelize to a block grid; export with the same structure formats
 
 ## Minecraft versions
@@ -105,6 +107,8 @@ Dither when Mix is off: Floyd–Steinberg (MapartCraft-style), Atkinson, ordered
 Measured against Floyd–Steinberg on blurred (perceived) error across gradients and detailed images: Mix is about 20% lower error on average, up to 55% on wide gradients, and never more than a few percent worse in the hardest case (busy detail on a full palette). The gains are largest on limited packs such as carpet and on small maparts. The approach follows the spatial/dithered colour quantization work of Puzicha, Held, Ketterer, Buhmann & Fellner (ECCV 1998; IEEE TIP 2000) and Joel Yliluoma's [arbitrary-palette positional dithering](https://bisqwit.iki.fi/story/howto/dither/jy/).
 
 Map art always stays on the map-item palette because a filled map cannot show more. Models (below) match real cube textures unless you pick a restricted pack.
+
+Materials list amounts can follow Litematica’s Count / Auto / Stacks / SB style. The in-app update check works with **`-beta`** GitHub prereleases (not only full releases).
 
 ## Models
 

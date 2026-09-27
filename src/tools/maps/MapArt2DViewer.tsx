@@ -67,7 +67,8 @@ const MapArt2DViewer = forwardRef<HTMLDivElement, Props>(function MapArt2DViewer
     colourPreview.src = previewDataUrl
 
     const run = async () => {
-      const indices = decodeIndices(previewSurfaceIndices)
+      const indices = await decodeIndices(previewSurfaceIndices)
+      if (cancelled) return
       if (indices.length < width * length || previewSurfacePalette.length === 0) return
 
       const unique = new Set<number>()
@@ -222,14 +223,32 @@ function sampleTexture(tile: BlockFaceImage, cell: number): ImageData {
   return ctx.getImageData(0, 0, cell, cell)
 }
 
-function decodeIndices(b64: string): Uint8Array {
+function base64ToBytes(b64: string): Uint8Array {
   if (!b64) return new Uint8Array()
   try {
     const bin = atob(b64)
     const out = new Uint8Array(bin.length)
-    for (let i = 0; i < bin.length; i += 1) out[i] = bin.charCodeAt(i)
+    const chunk = 0x8000
+    for (let offset = 0; offset < bin.length; offset += chunk) {
+      const end = Math.min(offset + chunk, bin.length)
+      for (let i = offset; i < end; i += 1) out[i] = bin.charCodeAt(i)
+    }
     return out
   } catch {
     return new Uint8Array()
+  }
+}
+
+/** Surface indices may be raw or gzip (`1F 8B`) for large maps. */
+async function decodeIndices(b64: string): Promise<Uint8Array> {
+  const raw = base64ToBytes(b64)
+  if (raw.length < 2 || raw[0] !== 0x1f || raw[1] !== 0x8b) return raw
+  if (typeof DecompressionStream === 'undefined') return raw
+  try {
+    const stream = new Blob([raw as BlobPart]).stream().pipeThrough(new DecompressionStream('gzip'))
+    const buffer = await new Response(stream).arrayBuffer()
+    return new Uint8Array(buffer)
+  } catch {
+    return raw
   }
 }

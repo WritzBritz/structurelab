@@ -1890,9 +1890,24 @@ input[type="checkbox"]:disabled {
   background-image: none;
 }
 
+.preview-stage > .preview-canvas-shell {
+  position: relative;
+  min-height: 0;
+  height: 100%;
+  min-width: 0;
+}
+
+.preview-stage > .preview-canvas-shell > .canvas-frame,
 .preview-stage > .canvas-frame {
   min-height: 0;
   height: 100%;
+}
+
+.preview-canvas-shell > .ui-load {
+  /* Stay fixed to the visible preview viewport — not the scrolled/zoomed art. */
+  position: absolute;
+  inset: 0;
+  z-index: 8;
 }
 
 .preview-toolbar {
@@ -2500,6 +2515,28 @@ input[type="checkbox"]:disabled {
 
 .material-heading span {
   color: var(--faint);
+}
+
+.material-count-format {
+  margin: 0 0 8px;
+}
+
+.material-count-format .ui-segmented,
+.material-count-format [role='group'] {
+  width: 100%;
+}
+
+.material-row-amount {
+  flex: none;
+  max-width: 9.5rem;
+  overflow: hidden;
+  color: inherit;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 650;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .material-tools {

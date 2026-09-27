@@ -237,16 +237,42 @@ export function nextConvertGeneration(): number {
 export async function convert(
   bytes: Uint8Array,
   options: ConvertOptions,
+  onProgress?: (ratio: number, label: string) => void,
 ): Promise<ConversionResponse> {
   const generation = nextConvertGeneration()
-  // Large map sources: encode off the critical path so the UI can keep painting.
-  const imageBase64 =
-    bytes.length > 256 * 1024 ? await bytesToBase64Async(bytes) : bytesToBase64(bytes)
-  return invoke<ConversionResponse>('convert_image', {
-    imageBase64,
-    options,
-    generation,
+  const { listen } = await import('@tauri-apps/api/event')
+  const unlisten = await listen<{
+    generation: number
+    ratio: number
+    label: string
+  }>('map-convert-progress', (event) => {
+    if (event.payload.generation !== generation) return
+    onProgress?.(event.payload.ratio, event.payload.label)
   })
+  try {
+    // Large map sources: encode off the critical path so the UI can keep painting.
+    const imageBase64 =
+      bytes.length > 256 * 1024
+        ? await bytesToBase64Async(bytes, (ratio) => {
+            onProgress?.(Math.min(0.04, ratio * 0.04), 'Reading image…')
+          })
+        : bytesToBase64(bytes)
+    return await invoke<ConversionResponse>('convert_image', {
+      imageBase64,
+      options,
+      generation,
+    })
+  } finally {
+    unlisten()
+  }
+}
+
+export async function loadMapPreviewVoxels(): Promise<{
+  previewBlockPalette: string[]
+  previewVoxels: string
+  previewVoxelStride: number
+}> {
+  return invoke('map_preview_voxels')
 }
 
 export async function convertScene(
@@ -282,7 +308,13 @@ const exportInfo: Record<
 
 export async function saveExport(
   format: ExportFormat,
-  options?: { minecraftVersion?: string; dataVersion?: number },
+  options?: {
+    minecraftVersion?: string
+    dataVersion?: number
+    litematicMapSubregions?: boolean
+    onStart?: () => void
+    onProgress?: (ratio: number, label: string) => void
+  },
 ): Promise<boolean> {
   const info = exportInfo[format]
   let versionId = options?.minecraftVersion?.trim() || ''
@@ -302,6 +334,29 @@ export async function saveExport(
     filters: [{ name: info.filter, extensions: [info.extension] }],
   })
   if (!path) return false
-  await invoke('export_current', { format, path })
-  return true
+
+  options?.onStart?.()
+  // Let the loading overlay paint before the heavy Rust work starts.
+  await new Promise<void>((resolve) => {
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => resolve())
+    })
+  })
+
+  const { listen } = await import('@tauri-apps/api/event')
+  const unlisten = await listen<{ ratio: number; label: string }>('export-progress', (event) => {
+    options?.onProgress?.(event.payload.ratio, event.payload.label)
+  })
+  try {
+    options?.onProgress?.(0.02, 'Starting export…')
+    await invoke('export_current', {
+      format,
+      path,
+      litematicMapSubregions: options?.litematicMapSubregions ?? false,
+    })
+    options?.onProgress?.(1, 'Export saved')
+    return true
+  } finally {
+    unlisten()
+  }
 }

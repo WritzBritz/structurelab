@@ -827,6 +827,84 @@ export function formatStacks(stacks: number, remainder: number): string {
   return `${stacks} ${stacks === 1 ? 'stack' : 'stacks'} + ${remainder}`
 }
 
+/** Vanilla max stack for almost all full cubes. */
+export const BLOCK_STACK_SIZE = 64
+/** Slots in a shulker box (same as a single chest / barrel). */
+export const SHULKER_SLOTS = 27
+/** Blocks in one shulker when every slot holds a full stack of 64 (= 1,728). */
+export const BLOCKS_PER_SHULKER = BLOCK_STACK_SIZE * SHULKER_SLOTS
+
+/**
+ * How material amounts are shown in the build list.
+ * Mirrors Litematica's material HUD (`getFormattedCountString`):
+ * - count — raw total only
+ * - stacks — `1,234 (19×64+18)` when over one stack
+ * - shulkers — `3,500 (2.03 SB)` fractional shulker boxes
+ * - auto — Litematica default: stacks under 1 box, `X.XX SB` once you hit a full shulker
+ */
+export type MaterialCountFormat = 'count' | 'stacks' | 'shulkers' | 'auto'
+
+const MATERIAL_COUNT_FORMAT_KEY = 'structurelab.materialCountFormat'
+
+export function readMaterialCountFormat(): MaterialCountFormat {
+  try {
+    const value = localStorage.getItem(MATERIAL_COUNT_FORMAT_KEY)
+    if (value === 'count' || value === 'stacks' || value === 'shulkers' || value === 'auto') {
+      return value
+    }
+  } catch {
+    /* ignore */
+  }
+  return 'auto'
+}
+
+export function writeMaterialCountFormat(format: MaterialCountFormat): void {
+  try {
+    localStorage.setItem(MATERIAL_COUNT_FORMAT_KEY, format)
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Compact amount string for material rows (Litematica-style). */
+export function formatMaterialCount(
+  count: number,
+  format: MaterialCountFormat = 'auto',
+): string {
+  if (count <= 0) return '0'
+  const total = count.toLocaleString()
+  if (format === 'count') return total
+
+  const stacks = Math.floor(count / BLOCK_STACK_SIZE)
+  const remainder = count % BLOCK_STACK_SIZE
+  const boxCount = count / BLOCKS_PER_SHULKER
+
+  if (format === 'shulkers') {
+    if (count <= BLOCK_STACK_SIZE) return total
+    return `${total} (${boxCount.toFixed(2)} SB)`
+  }
+
+  if (format === 'stacks') {
+    if (count <= BLOCK_STACK_SIZE) return total
+    if (remainder > 0) return `${total} (${stacks}×${BLOCK_STACK_SIZE}+${remainder})`
+    return `${total} (${stacks}×${BLOCK_STACK_SIZE})`
+  }
+
+  // auto — same thresholds as Litematica MaterialListHudRenderer
+  if (count <= BLOCK_STACK_SIZE) return total
+  if (boxCount >= 1) return `${total} (${boxCount.toFixed(2)} SB)`
+  if (remainder > 0) return `${total} (${stacks}×${BLOCK_STACK_SIZE}+${remainder})`
+  return `${total} (${stacks}×${BLOCK_STACK_SIZE})`
+}
+
+/** @deprecated Prefer formatMaterialCount — kept for call sites that want stacks-only prose. */
+export function formatMaterialBreakdown(count: number): string {
+  return formatStacks(
+    Math.floor(count / BLOCK_STACK_SIZE),
+    count % BLOCK_STACK_SIZE,
+  )
+}
+
 /** Every unique build block across the palette (for unrestricted overrides). */
 export function allPaletteBlocks(palette: PaletteFile, statueSafe = false): BlockChoice[] {
   const byId = new Map<string, BlockChoice>()

@@ -37,19 +37,34 @@ pub struct ConversionResponse {
     pub source_width: u32,
     pub source_height: u32,
     pub preview_data_url: String,
+    /// When set, colour preview PNG lives on disk (avoids multi-MB base64 over IPC).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preview_image_path: Option<String>,
     /// Top-surface block states for the textured 2D map preview (one per map pixel).
     pub preview_surface_palette: Vec<String>,
     /// Base64 of `width * length` bytes — index into `preview_surface_palette`.
+    /// Large maps may be gzip-compressed (detectable via `1F 8B` magic after decode).
     pub preview_surface_indices: String,
     /// Unique block states used in the 3D preview (indexed by voxel records).
     pub preview_block_palette: Vec<String>,
     /// Base64 of packed voxels: repeating `[x:u16][y:u16][z:u16][paletteIndex:u8]` little-endian.
-    /// Includes support / water / staircase control blocks from the real structure.
+    /// Empty with `preview_voxel_stride == 0` means deferred — load via `map_preview_voxels`.
     pub preview_voxels: String,
     /// When >1, preview kept every Nth column; cubes should be drawn N wide so they stay flush.
+    /// `0` means 3D voxels were deferred for a large build.
     pub preview_voxel_stride: u32,
     pub build: BuildResult,
 }
+
+/// Cap colour-preview bitmap so PNG encode + IPC stay responsive on huge mosaics.
+const PREVIEW_MAX_EDGE: u32 = 2048;
+const PREVIEW_MAX_PIXELS: u64 = 1_572_864; // ~1536²
+/// Above this many placed blocks, skip packing 3D voxels during convert (load on demand).
+const DEFER_VOXEL_PACK_BLOCKS: usize = 150_000;
+/// Gzip surface-index payloads larger than this before base64.
+const SURFACE_GZIP_MIN_BYTES: usize = 96 * 1024;
+/// Stage colour PNG instead of embedding when larger than this.
+const PREVIEW_STAGE_MIN_BYTES: usize = 192 * 1024;
 
 #[cfg(test)]
 fn auto_grid(width: u32, height: u32) -> [u32; 2] {
@@ -99,16 +114,37 @@ fn normalize_art_options(options: &mut ConvertOptions) {
     }
 }
 
+/// Optional convert progress: ratio in `0..=1` and a short UI label.
+pub type ConvertProgressFn<'a> = dyn Fn(f32, &str) + 'a;
+
+fn report_progress(progress: Option<&ConvertProgressFn<'_>>, ratio: f32, label: &str) {
+    if let Some(cb) = progress {
+        cb(ratio.clamp(0.0, 1.0), label);
+    }
+}
+
+#[allow(dead_code)] // Used by unit tests; runtime path uses convert_image_with_progress.
 pub fn convert_image(
     data: &[u8],
     options: &ConvertOptions,
     minecraft_version: &str,
 ) -> Result<ConversionResponse> {
+    convert_image_with_progress(data, options, minecraft_version, None)
+}
+
+pub fn convert_image_with_progress(
+    data: &[u8],
+    options: &ConvertOptions,
+    minecraft_version: &str,
+    progress: Option<&ConvertProgressFn<'_>>,
+) -> Result<ConversionResponse> {
     let mut options = options.clone();
     normalize_art_options(&mut options);
+    report_progress(progress, 0.04, "Decoding image…");
     let source = image::load_from_memory(data).context("unsupported or damaged image")?;
     let (source_width, source_height) = source.dimensions();
     let source = if options.trim_transparent {
+        report_progress(progress, 0.06, "Trimming transparent edges…");
         trim_transparent(source)
     } else {
         source
@@ -123,7 +159,9 @@ pub fn convert_image(
     } else {
         resolve_footprint(&options)?
     };
+    report_progress(progress, 0.1, "Fitting to map size…");
     let mut image = fit_image(&source, width, length, options.fit);
+    report_progress(progress, 0.14, "Adjusting colours…");
     adjust_image(
         &mut image,
         options.brightness,
@@ -132,6 +170,7 @@ pub fn convert_image(
         options.skip_transparent,
     );
 
+    report_progress(progress, 0.16, "Loading palette…");
     let palette = load_palette_for(minecraft_version)?;
     for (color_id, state) in &options.block_overrides {
         let color = palette
@@ -170,6 +209,9 @@ pub fn convert_image(
         None
     };
 
+    let maps_x = width.div_ceil(MAP_EDGE).max(1);
+    let maps_y = length.div_ceil(MAP_EDGE).max(1);
+
     let (mut selected, heights) = match options.mode {
         BuildMode::Flat => {
             let selected = quantize(
@@ -178,6 +220,11 @@ pub fn convert_image(
                 options.dither,
                 options.colour_matching,
                 None,
+                progress,
+                0.18,
+                0.82,
+                maps_x,
+                maps_y,
             )?;
             let heights = vec![0_i32; selected.len()];
             (selected, heights)
@@ -194,9 +241,15 @@ pub fn convert_image(
                 options.dither,
                 options.colour_matching,
                 None,
+                progress,
+                0.18,
+                0.62,
+                maps_x,
+                maps_y,
             )?;
             let width_usize = width as usize;
             let length_usize = length as usize;
+            report_progress(progress, 0.64, "Planning staircase heights…");
             let mut heights = classic_staircase_heights(
                 &selected,
                 &palette_candidates,
@@ -241,6 +294,7 @@ pub fn convert_image(
                     options.staircase_start_edge,
                 );
             if needed > limit || floor_needs_replan {
+                report_progress(progress, 0.68, "Replanning staircase for height…");
                 let color_ids = color_ids_from_selection(&selected, &palette_candidates);
                 let (solved_selected, solved_heights) = solve_staircase(
                     &image,
@@ -258,6 +312,7 @@ pub fn convert_image(
             // Both layouts sit on the ground per column. Ground-up DP already
             // starts at y=0; Off still needs this shift after classic / centred
             // stairs so a dip in one column cannot lift the rest of the map.
+            report_progress(progress, 0.78, "Aligning staircase columns…");
             floor_align_islands(
                 &mut heights,
                 &selected,
@@ -278,6 +333,7 @@ pub fn convert_image(
         }
     }
 
+    report_progress(progress, 0.86, "Placing blocks…");
     let build = build_structure(
         &palette,
         &palette_candidates,
@@ -287,15 +343,26 @@ pub fn convert_image(
         width,
         length,
     );
-    let preview_data_url = encode_preview(width, length, &selected, &palette_candidates)?;
+    report_progress(progress, 0.90, "Building colour preview…");
+    let (preview_data_url, preview_image_path) =
+        encode_preview(width, length, &selected, &palette_candidates)?;
+    report_progress(progress, 0.94, "Packing surface preview…");
     let (preview_surface_palette, preview_surface_indices) =
         encode_preview_surface(&selected, &palette_candidates);
-    let (preview_block_palette, preview_voxels, preview_voxel_stride) =
-        encode_preview_voxels(&build);
+    let defer_voxels = build.structure.blocks.len() >= DEFER_VOXEL_PACK_BLOCKS;
+    let (preview_block_palette, preview_voxels, preview_voxel_stride) = if defer_voxels {
+        report_progress(progress, 0.97, "Deferring 3D preview (open 3D to load)…");
+        (Vec::new(), String::new(), 0)
+    } else {
+        report_progress(progress, 0.97, "Packing 3D preview…");
+        encode_preview_voxels(&build)
+    };
+    report_progress(progress, 1.0, "Done");
     Ok(ConversionResponse {
         source_width,
         source_height,
         preview_data_url,
+        preview_image_path,
         preview_surface_palette,
         preview_surface_indices,
         preview_block_palette,
@@ -632,6 +699,11 @@ fn quantize_mix(
     image: &RgbaImage,
     candidates: &[PaletteCandidate],
     shade_lock: Option<&[u8]>,
+    progress: Option<&ConvertProgressFn<'_>>,
+    progress_start: f32,
+    progress_end: f32,
+    maps_x: u32,
+    maps_y: u32,
 ) -> Vec<usize> {
     let width = image.width() as usize;
     let height = image.height() as usize;
@@ -648,6 +720,7 @@ fn quantize_mix(
         .collect::<Vec<_>>();
     let mut plans: HashMap<([u8; 3], Option<u8>), [usize; MIX_PLAN_SIZE]> = HashMap::new();
     let mut output = vec![EMPTY_SELECTION; work.len()];
+    let mut last_tile = 0_u64;
 
     for y in 0..height {
         for x in 0..width {
@@ -691,6 +764,16 @@ fn quantize_mix(
                 }
             }
         }
+        report_quantize_row_progress(
+            progress,
+            progress_start,
+            progress_end,
+            y,
+            height,
+            maps_x,
+            maps_y,
+            &mut last_tile,
+        );
     }
 
     output
@@ -733,16 +816,62 @@ pub(crate) fn nearest_colour(
 /// Ordered Bayer amplitude — classic mapart strength for gradients on 128×128.
 const ORDERED_DITHER_AMOUNT: f32 = 28.0;
 
+fn report_quantize_row_progress(
+    progress: Option<&ConvertProgressFn<'_>>,
+    progress_start: f32,
+    progress_end: f32,
+    y: usize,
+    height: usize,
+    maps_x: u32,
+    maps_y: u32,
+    last_tile: &mut u64,
+) {
+    if height == 0 {
+        return;
+    }
+    let total_tiles = (maps_x as u64).saturating_mul(maps_y as u64).max(1);
+    let row_frac = (y + 1) as f32 / height as f32;
+    let tiles_done = ((row_frac as f64) * total_tiles as f64)
+        .ceil()
+        .clamp(1.0, total_tiles as f64) as u64;
+    let ratio = progress_start + (progress_end - progress_start) * row_frac;
+    let tile_changed = tiles_done != *last_tile;
+    if !tile_changed && y + 1 != height && y % 8 != 7 {
+        return;
+    }
+    *last_tile = tiles_done;
+    let label = if total_tiles <= 1 {
+        "Matching colours…".to_string()
+    } else {
+        format!("Matching colours · map {tiles_done}/{total_tiles}")
+    };
+    report_progress(progress, ratio, &label);
+}
+
 fn quantize(
     image: &RgbaImage,
     candidates: &[PaletteCandidate],
     dither: crate::model::DitherMode,
     matching: ColourMatching,
     shade_lock: Option<&[u8]>,
+    progress: Option<&ConvertProgressFn<'_>>,
+    progress_start: f32,
+    progress_end: f32,
+    maps_x: u32,
+    maps_y: u32,
 ) -> Result<Vec<usize>> {
     use crate::model::DitherMode;
     if matching == ColourMatching::StructureLabMix {
-        return Ok(quantize_mix(image, candidates, shade_lock));
+        return Ok(quantize_mix(
+            image,
+            candidates,
+            shade_lock,
+            progress,
+            progress_start,
+            progress_end,
+            maps_x,
+            maps_y,
+        ));
     }
     let ctx = matching_ctx(matching, candidates);
     let width = image.width() as usize;
@@ -754,7 +883,7 @@ fn quantize(
         })
     };
 
-    // None / Ordered have no error diffusion — safe to parallelize per pixel.
+    // None / Ordered have no error diffusion — safe to parallelize per map-row strip.
     if matches!(dither, DitherMode::None | DitherMode::Ordered) {
         const BAYER: [[f32; 4]; 4] = [
             [0.0, 8.0, 2.0, 10.0],
@@ -763,25 +892,47 @@ fn quantize(
             [15.0, 7.0, 13.0, 5.0],
         ];
         let ordered = dither == DitherMode::Ordered;
-        let output = (0..height * width)
-            .into_par_iter()
-            .map(|index| {
-                let x = index % width;
-                let y = index / width;
-                let pixel = image.get_pixel(x as u32, y as u32);
-                if pixel[3] < TRANSPARENT_ALPHA {
-                    return EMPTY_SELECTION;
-                }
-                let mut sample = [pixel[0] as f32, pixel[1] as f32, pixel[2] as f32];
-                if ordered {
-                    let offset = (BAYER[y % 4][x % 4] / 16.0 - 0.5) * ORDERED_DITHER_AMOUNT;
-                    for channel in &mut sample {
-                        *channel = (*channel + offset).clamp(0.0, 255.0);
+        let mut output = vec![EMPTY_SELECTION; height * width];
+        let mut last_tile = 0_u64;
+        let strip = MAP_EDGE as usize;
+        let mut y0 = 0usize;
+        while y0 < height {
+            let y1 = (y0 + strip).min(height);
+            output[y0 * width..y1 * width]
+                .par_chunks_mut(width)
+                .enumerate()
+                .for_each(|(row_offset, row)| {
+                    let y = y0 + row_offset;
+                    for (x, slot) in row.iter_mut().enumerate() {
+                        let index = y * width + x;
+                        let pixel = image.get_pixel(x as u32, y as u32);
+                        if pixel[3] < TRANSPARENT_ALPHA {
+                            *slot = EMPTY_SELECTION;
+                            continue;
+                        }
+                        let mut sample = [pixel[0] as f32, pixel[1] as f32, pixel[2] as f32];
+                        if ordered {
+                            let offset =
+                                (BAYER[y % 4][x % 4] / 16.0 - 0.5) * ORDERED_DITHER_AMOUNT;
+                            for channel in &mut sample {
+                                *channel = (*channel + offset).clamp(0.0, 255.0);
+                            }
+                        }
+                        *slot = nearest(sample, candidates, ctx, lock_at(index));
                     }
-                }
-                nearest(sample, candidates, ctx, lock_at(index))
-            })
-            .collect();
+                });
+            report_quantize_row_progress(
+                progress,
+                progress_start,
+                progress_end,
+                y1 - 1,
+                height,
+                maps_x,
+                maps_y,
+                &mut last_tile,
+            );
+            y0 = y1;
+        }
         return Ok(output);
     }
 
@@ -790,6 +941,7 @@ fn quantize(
         .map(|p| [p[0] as f32, p[1] as f32, p[2] as f32])
         .collect::<Vec<_>>();
     let mut output = vec![0; work.len()];
+    let mut last_tile = 0_u64;
     for y in 0..height {
         for x in 0..width {
             let index = y * width + x;
@@ -840,6 +992,16 @@ fn quantize(
                 }
             }
         }
+        report_quantize_row_progress(
+            progress,
+            progress_start,
+            progress_end,
+            y,
+            height,
+            maps_x,
+            maps_y,
+            &mut last_tile,
+        );
     }
     Ok(output)
 }
@@ -1711,8 +1873,10 @@ fn build_structure(
             (0..maps_x).map(move |column| MapTile {
                 column,
                 row,
-                start_x: column * MAP_EDGE,
-                start_z: row * MAP_EDGE + z_offset,
+                // Store starts in post-normalize structure space so Litematica
+                // sub-region export can split without re-deriving min corners.
+                start_x: (column as i32 * MAP_EDGE as i32 - min_x).max(0) as u32,
+                start_z: (row as i32 * MAP_EDGE as i32 + z_offset as i32 - min_z).max(0) as u32,
             })
         })
         .collect();
@@ -1815,21 +1979,67 @@ fn encode_preview(
     height: u32,
     selected: &[usize],
     candidates: &[PaletteCandidate],
-) -> Result<String> {
-    let preview = image_from_selection(width, height, selected, candidates);
+) -> Result<(String, Option<String>)> {
+    let mut preview = image_from_selection(width, height, selected, candidates);
+    let (src_w, src_h) = preview.dimensions();
+    let pixels = src_w as u64 * src_h as u64;
+    if pixels > PREVIEW_MAX_PIXELS || src_w > PREVIEW_MAX_EDGE || src_h > PREVIEW_MAX_EDGE {
+        let scale = (PREVIEW_MAX_EDGE as f32 / src_w.max(1) as f32)
+            .min(PREVIEW_MAX_EDGE as f32 / src_h.max(1) as f32)
+            .min(((PREVIEW_MAX_PIXELS as f32) / pixels.max(1) as f32).sqrt())
+            .min(1.0);
+        let nw = ((src_w as f32) * scale).round().max(1.0) as u32;
+        let nh = ((src_h as f32) * scale).round().max(1.0) as u32;
+        // Nearest keeps map shades crisp when we only shrink for display/IPC.
+        preview = imageops::resize(&preview, nw, nh, FilterType::Nearest);
+    }
     let mut bytes = Cursor::new(Vec::new());
     // Fast/no-filter PNG: preview encode was a major cost on multi-megapixel maps.
     PngEncoder::new_with_quality(&mut bytes, CompressionType::Fast, PngFilterType::NoFilter)
         .write_image(
             preview.as_raw(),
-            width,
-            height,
+            preview.width(),
+            preview.height(),
             image::ExtendedColorType::Rgba8,
         )?;
-    Ok(format!(
-        "data:image/png;base64,{}",
-        STANDARD.encode(bytes.into_inner())
+    let png = bytes.into_inner();
+    if png.len() >= PREVIEW_STAGE_MIN_BYTES {
+        let path = stage_preview_png(&png)?;
+        return Ok((String::new(), Some(path)));
+    }
+    Ok((
+        format!("data:image/png;base64,{}", STANDARD.encode(png)),
+        None,
     ))
+}
+
+fn stage_preview_png(png: &[u8]) -> Result<String> {
+    let dir = std::env::temp_dir().join("structurelab-stage");
+    std::fs::create_dir_all(&dir).context("could not create preview stage dir")?;
+    // Unique path every convert — a fixed filename made colour/dither changes look
+    // like no-ops because convertFileSrc / the webview kept serving the old PNG.
+    let id = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let path = dir.join(format!("map-convert-preview-{id}.png"));
+    std::fs::write(&path, png).context("could not write preview PNG")?;
+    if let Ok(entries) = std::fs::read_dir(&dir) {
+        for entry in entries.flatten() {
+            let other = entry.path();
+            if other == path {
+                continue;
+            }
+            let name = other
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or_default();
+            if name.starts_with("map-convert-preview") && name.ends_with(".png") {
+                let _ = std::fs::remove_file(other);
+            }
+        }
+    }
+    Ok(path.to_string_lossy().replace('\\', "/"))
 }
 
 /// Pack the top-surface block used for each map pixel (textured 2D preview).
@@ -1861,11 +2071,24 @@ fn encode_preview_surface(
         indices.push(idx);
     }
 
-    (palette, STANDARD.encode(indices))
+    let payload = if indices.len() >= SURFACE_GZIP_MIN_BYTES {
+        gzip_bytes(&indices).unwrap_or(indices)
+    } else {
+        indices
+    };
+    (palette, STANDARD.encode(payload))
+}
+
+fn gzip_bytes(data: &[u8]) -> Result<Vec<u8>> {
+    use flate2::{write::GzEncoder, Compression};
+    let mut encoder = GzEncoder::new(Vec::new(), Compression::fast());
+    use std::io::Write;
+    encoder.write_all(data)?;
+    Ok(encoder.finish()?)
 }
 
 /// Pack the real structure (supports included) for the textured 3D preview.
-fn encode_preview_voxels(build: &BuildResult) -> (Vec<String>, String, u32) {
+pub fn encode_preview_voxels(build: &BuildResult) -> (Vec<String>, String, u32) {
     // Always pack every block at stride 1. Thinning + footprint expand made large
     // builds (e.g. trim-transparent map art) look like flat slabs with stair gaps.
     // InstancedMesh handles typical multi-map staircase counts; huge builds may be
@@ -2107,6 +2330,11 @@ mod tests {
             crate::model::DitherMode::FloydSteinberg,
             ColourMatching::RebaneMapartClassic,
             None,
+            None,
+            0.0,
+            1.0,
+            1,
+            1,
         )
         .unwrap();
         let mixed = quantize(
@@ -2115,6 +2343,11 @@ mod tests {
             crate::model::DitherMode::None,
             ColourMatching::StructureLabMix,
             None,
+            None,
+            0.0,
+            1.0,
+            1,
+            1,
         )
         .unwrap();
 
@@ -2146,6 +2379,11 @@ mod tests {
             crate::model::DitherMode::None,
             ColourMatching::StructureLabMix,
             Some(&locks),
+            None,
+            0.0,
+            1.0,
+            1,
+            1,
         )
         .unwrap();
         for choice in selected {

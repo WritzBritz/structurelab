@@ -743,7 +743,11 @@ function decodeVoxels(b64: string, palette: string[], _stride: number): Cell[] {
   try {
     const bin = atob(b64)
     raw = new Uint8Array(bin.length)
-    for (let i = 0; i < bin.length; i += 1) raw[i] = bin.charCodeAt(i)
+    const chunk = 0x8000
+    for (let offset = 0; offset < bin.length; offset += chunk) {
+      const end = Math.min(offset + chunk, bin.length)
+      for (let i = offset; i < end; i += 1) raw[i] = bin.charCodeAt(i)
+    }
   } catch {
     return []
   }

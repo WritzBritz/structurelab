@@ -153,18 +153,24 @@ export interface ConversionResponse {
   sourceWidth: number
   sourceHeight: number
   previewDataUrl: string
+  /** Absolute path to a staged colour-preview PNG (preferred over huge data URLs). */
+  previewImagePath?: string | null
   /** Top-surface blocks for the textured 2D map preview. */
   previewSurfacePalette: string[]
-  /** Base64 of `width * length` bytes — index into `previewSurfacePalette`. */
+  /** Base64 of `width * length` bytes — index into `previewSurfacePalette` (may be gzip). */
   previewSurfaceIndices: string
   /** Unique block states for the 3D preview. */
   previewBlockPalette: string[]
   /**
    * Base64 of packed voxels: repeating little-endian
    * `[x:u16][y:u16][z:u16][paletteIndex:u8]` (includes supports).
+   * Empty when `previewVoxelStride === 0` (deferred — load on 3D open).
    */
   previewVoxels: string
-  /** Preview kept every Nth column when large; draw cubes N wide so they stay flush. */
+  /**
+   * Preview kept every Nth column when large; draw cubes N wide so they stay flush.
+   * `0` means 3D voxels were deferred for a large build.
+   */
   previewVoxelStride: number
   build: BuildResult
 }

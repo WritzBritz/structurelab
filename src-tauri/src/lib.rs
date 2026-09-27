@@ -375,8 +375,47 @@ async fn download_vanilla_texture_objects(
     .map_err(|error| format!("{error}"))?
 }
 
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MapConvertProgressPayload {
+    generation: u64,
+    ratio: f32,
+    label: String,
+}
+
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MapPreviewVoxelsPayload {
+    preview_block_palette: Vec<String>,
+    preview_voxels: String,
+    preview_voxel_stride: u32,
+}
+
+/// Pack 3D preview voxels from the stored build (used when convert deferred them).
+#[tauri::command]
+fn map_preview_voxels(
+    state: tauri::State<'_, ProjectState>,
+) -> Result<MapPreviewVoxelsPayload, String> {
+    let inner = state
+        .0
+        .lock()
+        .map_err(|_| "project state is unavailable")?;
+    let build = inner
+        .build
+        .as_ref()
+        .ok_or_else(|| "convert something before opening the 3D preview".to_string())?;
+    let (preview_block_palette, preview_voxels, preview_voxel_stride) =
+        converter::encode_preview_voxels(build);
+    Ok(MapPreviewVoxelsPayload {
+        preview_block_palette,
+        preview_voxels,
+        preview_voxel_stride,
+    })
+}
+
 #[tauri::command]
 async fn convert_image(
+    app: tauri::AppHandle,
     image_base64: String,
     options: ConvertOptions,
     generation: u64,
@@ -392,11 +431,36 @@ async fn convert_image(
     };
     let mut response = tauri::async_runtime::spawn_blocking(move || {
         crash::catch_convert(|| {
+            use tauri::Emitter;
             let data = STANDARD
                 .decode(image_base64)
                 .map_err(|error| format!("invalid image payload: {error}"))?;
-            converter::convert_image(&data, &options, &minecraft_version)
-                .map_err(|error| error.to_string())
+            let last_emit = std::sync::Mutex::new((0.0_f32, String::new()));
+            let progress = move |ratio: f32, label: &str| {
+                let mut guard = last_emit.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                let (last_ratio, last_label) = &mut *guard;
+                if label == last_label.as_str() && (ratio - *last_ratio).abs() < 0.01 && ratio < 0.999
+                {
+                    return;
+                }
+                *last_ratio = ratio;
+                *last_label = label.to_string();
+                let _ = app.emit(
+                    "map-convert-progress",
+                    MapConvertProgressPayload {
+                        generation,
+                        ratio,
+                        label: label.to_string(),
+                    },
+                );
+            };
+            converter::convert_image_with_progress(
+                &data,
+                &options,
+                &minecraft_version,
+                Some(&progress),
+            )
+            .map_err(|error| error.to_string())
         })
     })
     .await
@@ -738,34 +802,80 @@ fn ensure_readable_local_file(path: &Path) -> Result<u64, String> {
     Ok(meta.len())
 }
 
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ExportProgressPayload {
+    ratio: f32,
+    label: String,
+}
+
 #[tauri::command]
-fn export_current(
+async fn export_current(
+    app: tauri::AppHandle,
     format: ExportFormat,
     path: PathBuf,
+    litematic_map_subregions: Option<bool>,
     state: tauri::State<'_, ProjectState>,
 ) -> Result<(), String> {
-    let inner = state
-        .0
-        .lock()
-        .map_err(|_| "project state is unavailable")?;
-    let build = inner
-        .build
-        .as_ref()
-        .ok_or_else(|| "convert something before exporting".to_string())?;
-    if build.minecraft_version != inner.minecraft_version {
-        return Err(format!(
-            "build is for Minecraft {}, but the app is on {} — convert again before exporting",
-            build.minecraft_version, inner.minecraft_version
-        ));
-    }
-    if build.data_version <= 0 {
-        return Err("build is missing a Minecraft DataVersion — convert again before exporting".into());
-    }
-    export::export(build, format, &path).map_err(|error| {
-        let text = error.to_string();
-        crash::append_log(&format!("[export] {text}"));
-        text
+    let (build, options) = {
+        let inner = state
+            .0
+            .lock()
+            .map_err(|_| "project state is unavailable")?;
+        let build = inner
+            .build
+            .as_ref()
+            .ok_or_else(|| "convert something before exporting".to_string())?
+            .clone();
+        if build.minecraft_version != inner.minecraft_version {
+            return Err(format!(
+                "build is for Minecraft {}, but the app is on {} — convert again before exporting",
+                build.minecraft_version, inner.minecraft_version
+            ));
+        }
+        if build.data_version <= 0 {
+            return Err(
+                "build is missing a Minecraft DataVersion — convert again before exporting".into(),
+            );
+        }
+        let options = export::ExportOptions {
+            litematic_map_subregions: litematic_map_subregions.unwrap_or(false),
+        };
+        (build, options)
+    };
+
+    tauri::async_runtime::spawn_blocking(move || {
+        use tauri::Emitter;
+        let last_emit = std::sync::Mutex::new((0.0_f32, String::new()));
+        let progress = move |ratio: f32, label: &str| {
+            let mut guard = last_emit.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let (last_ratio, last_label) = &mut *guard;
+            if label == last_label.as_str() && (ratio - *last_ratio).abs() < 0.02 && ratio < 0.999 {
+                return;
+            }
+            *last_ratio = ratio;
+            *last_label = label.to_string();
+            let _ = app.emit(
+                "export-progress",
+                ExportProgressPayload {
+                    ratio,
+                    label: label.to_string(),
+                },
+            );
+        };
+        export::export_with_progress(&build, format, &path, options, Some(&progress)).map_err(
+            |error| {
+                let text = error.to_string();
+                crash::append_log(&format!("[export] {text}"));
+                text
+            },
+        )
     })
+    .await
+    .map_err(|error| {
+        crash::append_log(&format!("export worker failed: {error}"));
+        format!("export task failed: {error}")
+    })?
 }
 
 fn run_main_app() {
@@ -786,6 +896,7 @@ fn run_main_app() {
             install_vanilla_textures,
             download_vanilla_texture_objects,
             convert_image,
+            map_preview_voxels,
             import_model,
             convert_model,
             convert_scene,
