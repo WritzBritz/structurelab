@@ -2910,9 +2910,11 @@ mod tests {
         hollow_outer_multiview(&mut grid);
         let after = grid.occupied_count();
         assert!(after < before, "before={before} after={after}");
+        // 8×8×8 solid → exterior shell ≈ 8³ − 6³ = 296. Denser multiview
+        // sampling keeps the full shell (older sparse rays undershot this).
         assert!(
-            after * 2 < before,
-            "should strip most of the solid interior, before={before} after={after}"
+            (280..=320).contains(&after),
+            "expected ~296 exterior cells, before={before} after={after}"
         );
         assert!(grid.is_occupied(2, 5, 5), "outer face kept");
         assert!(!grid.is_occupied(5, 5, 5), "buried core dropped");
