@@ -280,14 +280,50 @@ fn skip_uncommon_statue_block(id: &str) -> bool {
         || id.ends_with("_tiles")
         || id.starts_with("cut_")
         || id.contains("_ore")
+        || skip_precious_statue_block(id)
         || matches!(
             id,
-            "sponge" | "wet_sponge" | "honeycomb_block" | "netherite_block" | "bedrock"
+            "sponge" | "wet_sponge" | "honeycomb_block" | "bedrock"
         )
+}
+
+/// Rare gem / metal storage cubes — not “common” survival build material.
+/// Iron, copper, coal, and redstone stay; Everything pack unlocks these.
+fn skip_precious_statue_block(id: &str) -> bool {
+    matches!(
+        id,
+        "diamond_block"
+            | "emerald_block"
+            | "gold_block"
+            | "netherite_block"
+            | "lapis_block"
+            | "amethyst_block"
+            | "ancient_debris"
+    )
+}
+
+/// Liquids and powder snow — never statue voxels (flow, hurt, or wrong shade).
+fn is_fluid_block_id(id: &str) -> bool {
+    matches!(
+        id,
+        "water"
+            | "flowing_water"
+            | "bubble_column"
+            | "water_cauldron"
+            | "lava"
+            | "flowing_lava"
+            | "lava_cauldron"
+            | "powder_snow"
+            | "powder_snow_cauldron"
+    )
 }
 
 /// Whether this cube belongs in the active Models block pack.
 fn skip_appearance_for_pack(id: &str, pack: StatueBlockPack) -> bool {
+    // Fluids are never auto-matched, even in the Everything pack.
+    if is_fluid_block_id(id) {
+        return true;
+    }
     match pack {
         StatueBlockPack::Everything => false,
         StatueBlockPack::Wool => !id.ends_with("_wool"),
@@ -727,6 +763,7 @@ fn is_statue_furniture_block(id: &str) -> bool {
         || id.contains("sculk_sensor")
         || id.contains("sculk_shrieker")
         || id.contains("pointed_dripstone")
+        || id.contains("sulfur_spike")
         || id.contains("amethyst_cluster")
         || id.contains("amethyst_bud")
         || id.contains("tripwire")
@@ -820,6 +857,9 @@ fn is_host_attached_block(state: &str) -> bool {
             | "pale_hanging_moss"
             | "hanging_roots"
             | "spore_blossom"
+            // Pointed mount — not a cube; jar only has tip/base face PNGs.
+            | "sulfur_spike"
+            | "pointed_dripstone"
     ) || id.ends_with("_coral_fan")
         || id.ends_with("_coral_wall_fan")
         || id.ends_with("_wall_torch")
@@ -827,14 +867,21 @@ fn is_host_attached_block(state: &str) -> bool {
 }
 
 fn parse_or_simple(state: &str) -> BlockState {
-    BlockState::parse(state).unwrap_or_else(|| BlockState::simple(state.to_string()))
+    BlockState::parse(state)
+        .unwrap_or_else(|| BlockState::simple(state.to_string()))
+        .stabilize_for_structure_paste()
 }
 
 /// Minecraft map colour is sampled as if looking down. These blocks' map
 /// colour (or default texture in our 3D preview) comes from a unique top /
 /// end face, while the sides are a different hue — Warped Nylium is cyan on
 /// top and netherrack-brown on the sides. Fine for maps; wrong for statues
-/// and wall pixel art.
+/// and wall pixel art unless match RGB is face-weighted (see `cube_texture_rgb`).
+///
+/// Keep this list to **strong** top≠side cases used to drop cubes from the
+/// Common Models pack / omni defaults. Milder multi-face cubes (sandstone,
+/// crafting table…) still get face-weighted match RGB via
+/// [`crate::assets::is_sided_cube_stem`] without being excluded here.
 fn is_anisotropic_map_block(state: &str) -> bool {
     let id = block_id(state);
     matches!(
@@ -850,15 +897,35 @@ fn is_anisotropic_map_block(state: &str) -> bool {
             | "bone_block"
             | "quartz_pillar"
             | "purpur_pillar"
+            | "basalt"
+            | "polished_basalt"
+            | "bamboo_block"
+            | "stripped_bamboo_block"
             | "pearlescent_froglight"
             | "verdant_froglight"
             | "ochre_froglight"
+            | "dried_kelp_block"
+            | "lodestone"
+            | "target"
+            | "melon"
+            | "pumpkin"
+            | "carved_pumpkin"
+            | "jack_o_lantern"
+            | "creaking_heart"
+            | "ancient_debris"
+            | "reinforced_deepslate"
+            | "bookshelf"
+            | "chiseled_bookshelf"
     ) || id.ends_with("_nylium")
-        || ((id.ends_with("_stem") || id.ends_with("_log") || id.ends_with("_hyphae"))
+        || ((id.ends_with("_stem")
+            || id.ends_with("_log")
+            || id.ends_with("_hyphae")
+            || id.ends_with("_wood"))
             && !id.contains("mushroom")
             && !id.contains("chorus")
             && !id.contains("attached")
-            && !id.contains("pumpkin"))
+            && !id.contains("pumpkin")
+            && !id.contains("campfire"))
 }
 
 /// Nether wood / axis blocks and other cubes that are a bad default statue voxel.
@@ -2301,15 +2368,38 @@ mod tests {
             "exposed_copper_bulb",
             "weathered_copper_bulb",
             "oxidized_copper_bulb",
+            "diamond_block",
+            "emerald_block",
+            "gold_block",
+            "netherite_block",
+            "lapis_block",
         ] {
             assert!(
                 ids.contains(need),
                 "Everything pack should include {need}"
             );
         }
+        let common = candidates_for_models_appearance(&palette, &[], &Default::default());
+        let common_ids: std::collections::BTreeSet<_> = common
+            .iter()
+            .map(|candidate| block_id(&candidate.block.canonical_name()).to_string())
+            .collect();
+        for rare in [
+            "diamond_block",
+            "emerald_block",
+            "gold_block",
+            "netherite_block",
+            "lapis_block",
+            "amethyst_block",
+            "ancient_debris",
+        ] {
+            assert!(
+                !common_ids.contains(rare),
+                "Common pack should not include rare storage cube {rare}"
+            );
+        }
         assert!(
-            everything.len()
-                > candidates_for_models_appearance(&palette, &[], &Default::default()).len(),
+            everything.len() > common.len(),
             "Everything must be a larger cube pool than Common"
         );
     }
@@ -2327,6 +2417,15 @@ mod tests {
             .map(|name| block_id(name).to_string())
             .collect();
         for banned in [
+            "lava",
+            "flowing_lava",
+            "lava_cauldron",
+            "water",
+            "flowing_water",
+            "water_cauldron",
+            "bubble_column",
+            "powder_snow",
+            "powder_snow_cauldron",
             "fire",
             "soul_fire",
             "campfire",

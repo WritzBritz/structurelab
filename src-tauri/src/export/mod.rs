@@ -1,4 +1,5 @@
 mod litematic;
+mod place_datapack;
 mod sponge;
 mod vanilla;
 
@@ -20,6 +21,7 @@ pub enum ExportFormat {
     LitematicV6,
     LitematicV7,
     SpongeV3,
+    CommandDatapack,
     All,
 }
 
@@ -88,6 +90,18 @@ pub fn export_with_progress(
             report_export(progress, 0.95, "Writing file…");
             Ok(())
         }
+        ExportFormat::CommandDatapack => {
+            report_export(progress, 0.35, "Encoding place datapack…");
+            let bytes = place_datapack::encode_datapack(
+                &build.structure,
+                data_version,
+                options.datapack_name.as_deref().unwrap_or("build"),
+                options.datapack.clone(),
+            )?;
+            std::fs::write(path, bytes)?;
+            report_export(progress, 0.95, "Writing file…");
+            Ok(())
+        }
         ExportFormat::All => {
             write_all_bundle(build, path, options, progress)?;
             Ok(())
@@ -97,11 +111,17 @@ pub fn export_with_progress(
     result.with_context(|| format!("failed to write {}", path.display()))
 }
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct ExportOptions {
     /// When true, multi-map mosaics write one Litematica region per 128×128 map.
     pub litematic_map_subregions: bool,
+    /// Resource path for place datapack (`structurelab:<name>`).
+    pub datapack_name: Option<String>,
+    /// Instant vs animated placement options for `CommandDatapack`.
+    pub datapack: place_datapack::DatapackEncodeOptions,
 }
+
+pub use place_datapack::{DatapackEncodeOptions, DatapackPattern};
 
 fn write_all_bundle(
     build: &BuildResult,

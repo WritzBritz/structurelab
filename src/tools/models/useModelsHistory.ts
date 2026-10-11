@@ -1,4 +1,4 @@
-import type { ScenePartLocal } from '../../types'
+import type { DatapackPattern, ScenePartLocal } from '../../types'
 import type { WorkflowStep } from './modelsPresets'
 import { useDocumentHistory, type HistoryProgress } from '../../history/useDocumentHistory'
 
@@ -27,6 +27,12 @@ export type ModelsHistorySnapshot = {
   placementDirty: boolean
   step: WorkflowStep
   showSourcePreview: boolean
+  datapackName: string
+  datapackPattern: DatapackPattern
+  datapackBlocksPerTick: number
+  datapackDelayTicks: number
+  datapackTargetSeconds: number
+  datapackPiecesPerTick: number
 }
 
 export type { HistoryProgress }
@@ -141,7 +147,52 @@ export function cloneModelsSnapshot(snapshot: ModelsHistorySnapshot): ModelsHist
     placementDirty: snapshot.placementDirty,
     step: snapshot.step,
     showSourcePreview: snapshot.showSourcePreview,
+    datapackName: snapshot.datapackName,
+    datapackPattern: snapshot.datapackPattern,
+    datapackBlocksPerTick: snapshot.datapackBlocksPerTick,
+    datapackDelayTicks: snapshot.datapackDelayTicks,
+    datapackTargetSeconds: snapshot.datapackTargetSeconds,
+    datapackPiecesPerTick: snapshot.datapackPiecesPerTick,
   }
+}
+
+function buildFingerprint(snapshot: ModelsHistorySnapshot): string {
+  return JSON.stringify({
+    selectedId: snapshot.selectedId,
+    shared: snapshot.shared,
+    outer3d: snapshot.outer3d,
+    freeBend: snapshot.freeBend,
+    smoothJoints: snapshot.smoothJoints,
+    skinLimbBend: snapshot.skinLimbBend,
+    placementDirty: snapshot.placementDirty,
+    step: snapshot.step,
+    showSourcePreview: snapshot.showSourcePreview,
+    parts: snapshot.parts.map((part) => ({
+      id: part.id,
+      kind: part.kind,
+      width: part.width,
+      height: part.height,
+      length: part.length,
+      positionX: part.positionX,
+      positionY: part.positionY,
+      positionZ: part.positionZ,
+      rotationX: part.rotationX,
+      rotationY: part.rotationY,
+      rotationZ: part.rotationZ,
+      skinPose: part.skinPose,
+      meshBonePose: part.meshBonePose,
+      uv: part.uv,
+    })),
+  })
+}
+
+/** True when undo/redo should discard the current convert result. */
+export function snapshotClearsBuild(
+  live: ModelsHistorySnapshot,
+  next: ModelsHistorySnapshot,
+): boolean {
+  // Keep the convert when only place-datapack settings differ.
+  return buildFingerprint(live) !== buildFingerprint(next)
 }
 
 export function estimateSnapshotBytes(snapshot: ModelsHistorySnapshot): number {

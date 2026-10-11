@@ -11,8 +11,72 @@ use super::voxelize::{
     clamp_voxel_dims, voxelize_mesh_with, UvTransform, VoxelFit, VoxelGrid,
 };
 use anyhow::{ensure, Result};
+use serde::de::{self, Deserializer, Visitor};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
+use std::fmt;
+
+/// Accept JS numbers that may still be fractional (gizmo used to store 0.1 steps).
+fn deserialize_block_i32<'de, D>(deserializer: D) -> Result<i32, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    struct BlockI32Visitor;
+    impl<'de> Visitor<'de> for BlockI32Visitor {
+        type Value = i32;
+        fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+            formatter.write_str("a block coordinate (integer or float)")
+        }
+        fn visit_i64<E: de::Error>(self, value: i64) -> Result<i32, E> {
+            i32::try_from(value).map_err(E::custom)
+        }
+        fn visit_u64<E: de::Error>(self, value: u64) -> Result<i32, E> {
+            i32::try_from(value).map_err(E::custom)
+        }
+        fn visit_f64<E: de::Error>(self, value: f64) -> Result<i32, E> {
+            if !value.is_finite() {
+                return Err(E::custom("non-finite block coordinate"));
+            }
+            Ok(value.round() as i32)
+        }
+        fn visit_f32<E: de::Error>(self, value: f32) -> Result<i32, E> {
+            self.visit_f64(f64::from(value))
+        }
+    }
+    deserializer.deserialize_any(BlockI32Visitor)
+}
+
+fn deserialize_block_u32<'de, D>(deserializer: D) -> Result<u32, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    struct BlockU32Visitor;
+    impl<'de> Visitor<'de> for BlockU32Visitor {
+        type Value = u32;
+        fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+            formatter.write_str("a block size (integer or float)")
+        }
+        fn visit_i64<E: de::Error>(self, value: i64) -> Result<u32, E> {
+            if value < 1 {
+                return Ok(1);
+            }
+            u32::try_from(value).map_err(E::custom)
+        }
+        fn visit_u64<E: de::Error>(self, value: u64) -> Result<u32, E> {
+            Ok(value.max(1).try_into().unwrap_or(u32::MAX))
+        }
+        fn visit_f64<E: de::Error>(self, value: f64) -> Result<u32, E> {
+            if !value.is_finite() {
+                return Err(E::custom("non-finite block size"));
+            }
+            Ok(value.round().max(1.0).min(f64::from(u32::MAX)) as u32)
+        }
+        fn visit_f32<E: de::Error>(self, value: f32) -> Result<u32, E> {
+            self.visit_f64(f64::from(value))
+        }
+    }
+    deserializer.deserialize_any(BlockU32Visitor)
+}
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -35,8 +99,11 @@ pub struct ScenePartOptions {
     /// Absolute path to staged file bytes (written via `stage_bytes_begin` / `stage_bytes_append`).
     #[serde(default)]
     pub data_path: Option<String>,
+    #[serde(deserialize_with = "deserialize_block_i32")]
     pub position_x: i32,
+    #[serde(deserialize_with = "deserialize_block_i32")]
     pub position_y: i32,
+    #[serde(deserialize_with = "deserialize_block_i32")]
     pub position_z: i32,
     /// Scene placement rotation in degrees (separate from skin_pose limb rotations).
     #[serde(default)]
@@ -45,13 +112,20 @@ pub struct ScenePartOptions {
     pub rotation_y: f32,
     #[serde(default)]
     pub rotation_z: f32,
+    #[serde(deserialize_with = "deserialize_block_u32")]
     pub width: u32,
+    #[serde(deserialize_with = "deserialize_block_u32")]
     pub height: u32,
+    #[serde(deserialize_with = "deserialize_block_u32")]
     pub length: u32,
     #[serde(default)]
     pub fit: VoxelFit,
     #[serde(default)]
     pub hollow: bool,
+    /// Keep only voxels visible from exterior multi-view cameras (stronger than hollow,
+    /// but preserves overhangs unlike axis silhouette).
+    #[serde(default)]
+    pub outer_silhouette: bool,
     /// Honor texture alpha as cutouts (catalog entities).
     #[serde(default)]
     pub cutout: bool,
@@ -197,7 +271,7 @@ pub fn convert_scene(
             ScenePartKind::Obj => {
                 let (mesh, info) =
                     super::import::load_mesh_with_sidecars(&part.data, &opts.file_name, &part.sidecars)?;
-                let grid = voxelize_mesh_with(
+                let mut grid = voxelize_mesh_with(
                     &mesh,
                     width,
                     height,
@@ -207,6 +281,9 @@ pub fn convert_scene(
                     opts.cutout,
                     &opts.uv,
                 )?;
+                if opts.outer_silhouette {
+                    super::voxelize::hollow_outer_multiview(&mut grid);
+                }
                 (grid, Some(info))
             }
             ScenePartKind::Skin => {
@@ -280,6 +357,9 @@ pub fn convert_scene(
                 if opts.hollow {
                     super::voxelize::hollow_out(&mut grid);
                 }
+                if opts.outer_silhouette {
+                    super::voxelize::hollow_outer_multiview(&mut grid);
+                }
                 (grid, None)
             }
         };
@@ -304,10 +384,15 @@ pub fn convert_scene(
 
     let (merged, part_of) = merge_grids(&local_grids)?;
     drop(local_grids);
+    let mut merged = merged;
+    // Re-run after merge so faces that only looked "exterior" per-part (then
+    // buried against a neighbour) are stripped for the final export grid.
+    if parts.iter().any(|p| p.options.outer_silhouette) {
+        super::voxelize::hollow_outer_multiview(&mut merged);
+    }
     let occupied_voxels = merged.occupied_count() as u32;
     ensure!(occupied_voxels > 0, "merged scene is empty");
 
-    let mut merged = merged;
     super::convert::adjust_grid_colours(
         &mut merged,
         shared.hue,
@@ -719,9 +804,10 @@ fn collect_scene_voxels(
     candidates: &[crate::palette::PaletteCandidate],
     assigned: &VoxelAssignment,
 ) -> Vec<SceneVoxel> {
-    const MAX_PREVIEW: usize = 250_000;
+    // Show every occupied block — thinning large statues looked like holes even
+    // when export was solid. Frontend LOD can thin later if needed.
     let fallback = candidates.len().saturating_sub(1);
-    select_preview_cells(grid, MAX_PREVIEW)
+    select_preview_cells(grid, usize::MAX)
         .into_iter()
         .map(|(x, y, z)| {
             let index = grid.index(x, y, z);
@@ -748,6 +834,29 @@ fn empty_grid(width: u32, height: u32, length: u32) -> VoxelGrid {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scene_part_options_accept_fractional_block_coords() {
+        let json = r#"{
+            "id": "a",
+            "name": "A",
+            "kind": "skin",
+            "fileName": "a.png",
+            "positionX": 16.6,
+            "positionY": -2.4,
+            "positionZ": 0.5,
+            "width": 18.2,
+            "height": 34.0,
+            "length": 10.9
+        }"#;
+        let opts: ScenePartOptions = serde_json::from_str(json).expect("parse");
+        assert_eq!(opts.position_x, 17);
+        assert_eq!(opts.position_y, -2);
+        assert_eq!(opts.position_z, 1);
+        assert_eq!(opts.width, 18);
+        assert_eq!(opts.height, 34);
+        assert_eq!(opts.length, 11);
+    }
 
     fn solid_grid(width: u32, height: u32, length: u32, rgb: [u8; 3]) -> VoxelGrid {
         let mut grid = empty_grid(width, height, length);
@@ -823,6 +932,7 @@ mod tests {
                 length: 16,
                 fit: VoxelFit::Fit,
                 hollow: false,
+                outer_silhouette: false,
                 cutout: false,
                 slim_arms: false,
                 outer_3d: true,
@@ -897,6 +1007,7 @@ mod tests {
                 length: 16,
                 fit: VoxelFit::Fit,
                 hollow,
+                outer_silhouette: false,
                 cutout: false,
                 slim_arms: false,
                 outer_3d: false,
@@ -973,6 +1084,7 @@ mod tests {
                 length,
                 fit: VoxelFit::Fit,
                 hollow: false,
+                outer_silhouette: false,
                 cutout: false,
                 slim_arms: false,
                 outer_3d: false,

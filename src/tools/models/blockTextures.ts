@@ -42,6 +42,9 @@ const TEXTURE_ALIASES: Record<string, string> = {
   smooth_quartz: 'quartz_block_bottom',
   smooth_sandstone: 'sandstone_top',
   smooth_red_sandstone: 'red_sandstone_top',
+  // Jar only ships tip/base/frustum faces (no bare sulfur_spike.png).
+  sulfur_spike: 'sulfur_spike_up_tip',
+  pointed_dripstone: 'pointed_dripstone_up_tip',
 }
 
 /**

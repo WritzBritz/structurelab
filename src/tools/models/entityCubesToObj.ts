@@ -730,5 +730,6 @@ export async function entityModelToPart(
     meshSkinMode: 'rigid',
     // Entity cubes are 6-face shells; solid fill at statue scale floods the grid.
     hollow: true,
+    outerSilhouette: false,
   }
 }

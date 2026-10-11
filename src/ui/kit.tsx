@@ -17,6 +17,8 @@ import {
   type ChangeEvent,
   type DragEvent,
   type ReactNode,
+  useEffect,
+  useState,
 } from 'react'
 import './kit.css'
 
@@ -42,6 +44,7 @@ export function NumberField({
   value,
   min = 1,
   max,
+  step = 1,
   onChange,
   onEditEnd,
 }: {
@@ -49,16 +52,33 @@ export function NumberField({
   value: number
   min?: number
   max?: number
+  /** Step size; values below 1 allow fractional input (e.g. 0.25 seconds). */
+  step?: number
   onChange: (value: number) => void
   onEditEnd?: () => void
 }) {
-  const clamp = (raw: string) => {
-    const next = Number(raw)
-    if (!Number.isFinite(next)) return min
-    const rounded = Math.round(next)
-    const low = Math.max(min, rounded)
+  const clamp = (raw: number) => {
+    if (!Number.isFinite(raw)) return min
+    let next = raw
+    if (step > 0 && step < 1) {
+      next = Math.round(raw / step) * step
+      // Avoid 0.30000000004-style noise in the field.
+      const places = Math.min(6, Math.max(0, Math.ceil(-Math.log10(step))))
+      const factor = 10 ** places
+      next = Math.round(next * factor) / factor
+    } else {
+      next = Math.round(raw)
+    }
+    const low = Math.max(min, next)
     return max == null ? low : Math.min(max, low)
   }
+
+  const [focused, setFocused] = useState(false)
+  const [text, setText] = useState(String(value))
+
+  useEffect(() => {
+    if (!focused) setText(String(value))
+  }, [value, focused])
 
   return (
     <Field label={label}>
@@ -66,11 +86,25 @@ export function NumberField({
         type="number"
         min={min}
         max={max}
-        value={String(value)}
+        step={step}
+        value={text}
+        onFocus={() => setFocused(true)}
         onChange={(event: ChangeEvent<HTMLInputElement>) => {
-          onChange(clamp(event.target.value))
+          const raw = event.target.value
+          setText(raw)
+          // Allow empty / intermediate edits; commit a number only when parseable.
+          if (raw.trim() === '' || raw === '-' || raw === '+' || raw.endsWith('.')) return
+          const next = Number(raw)
+          if (!Number.isFinite(next)) return
+          onChange(clamp(next))
         }}
-        onBlur={() => onEditEnd?.()}
+        onBlur={() => {
+          setFocused(false)
+          const next = clamp(text.trim() === '' ? min : Number(text))
+          setText(String(next))
+          if (next !== value) onChange(next)
+          onEditEnd?.()
+        }}
       />
     </Field>
   )

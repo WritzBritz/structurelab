@@ -345,6 +345,22 @@ fn extra_block_texture_stems(stem: &str) -> Vec<String> {
         }
         return out;
     }
+    // Bark / hyphae cubes reuse the log/stem side sheet (all six faces look like bark).
+    if let Some(rest) = stem.strip_prefix("stripped_") {
+        if let Some(base) = rest.strip_suffix("_wood") {
+            add(&format!("stripped_{base}_log"));
+        } else if let Some(base) = rest.strip_suffix("_hyphae") {
+            add(&format!("stripped_{base}_stem"));
+        }
+    } else if let Some(base) = stem.strip_suffix("_wood") {
+        if base == "bamboo" {
+            add("bamboo_block");
+        } else {
+            add(&format!("{base}_log"));
+        }
+    } else if let Some(base) = stem.strip_suffix("_hyphae") {
+        add(&format!("{base}_stem"));
+    }
     match stem {
         "smooth_quartz" => add("quartz_block_bottom"),
         "smooth_sandstone" => add("sandstone_top"),
@@ -372,6 +388,10 @@ fn texture_key_candidates(key: &str) -> Vec<String> {
 
 /// Average RGB of a block’s face PNG (opaque pixels). Used so Models / pixel art
 /// can match every cube in the version, not only the frozen appearance JSON.
+///
+/// Column / anisotropic cubes (logs, hay, basalt, …) use a **face-weighted**
+/// average — 4× side + top + bottom — so match colour matches how the cube looks
+/// in a statue, not the unique end-grain / top face Minecraft uses for map colour.
 pub fn cube_texture_rgb(stem: &str) -> Option<[u8; 3]> {
     static CACHE: OnceLock<Mutex<HashMap<String, Option<[u8; 3]>>>> = OnceLock::new();
     let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
@@ -389,26 +409,193 @@ pub fn cube_texture_rgb(stem: &str) -> Option<[u8; 3]> {
 
 fn cube_texture_rgb_uncached(stem: &str) -> Option<[u8; 3]> {
     let dirs = block_texture_search_dirs();
-    for name in block_texture_stem_candidates(stem) {
-        for dir in &dirs {
-            let path = dir.join(format!("{name}.png"));
-            if let Some(rgb) = average_opaque_png(&path) {
-                return Some(rgb);
+    let resolved = resolve_cube_texture_stem(stem);
+    if is_sided_cube_stem(&resolved) {
+        if let Some(rgb) = sided_cube_texture_rgb(&resolved, &dirs) {
+            return Some(rgb);
+        }
+    }
+    // Prefer side over top when a bare PNG is missing (hay/bone/basalt/pillars).
+    for name in block_texture_stem_candidates(&resolved) {
+        if let Some(rgb) = average_named_png(&name, &dirs) {
+            return Some(rgb);
+        }
+    }
+    None
+}
+
+/// Map bark / hyphae ids onto the log/stem texture stem they share.
+fn resolve_cube_texture_stem(stem: &str) -> String {
+    if let Some(rest) = stem.strip_prefix("stripped_") {
+        if let Some(base) = rest.strip_suffix("_wood") {
+            return format!("stripped_{base}_log");
+        }
+        if let Some(base) = rest.strip_suffix("_hyphae") {
+            return format!("stripped_{base}_stem");
+        }
+    }
+    if let Some(base) = stem.strip_suffix("_wood") {
+        if base == "bamboo" {
+            return "bamboo_block".into();
+        }
+        return format!("{base}_log");
+    }
+    if let Some(base) = stem.strip_suffix("_hyphae") {
+        return format!("{base}_stem");
+    }
+    stem.to_string()
+}
+
+/// Cubes whose top/end face differs a lot from the sides (logs, pillars, soil tops…).
+pub fn is_sided_cube_stem(stem: &str) -> bool {
+    matches!(
+        stem,
+        "grass_block"
+            | "podzol"
+            | "mycelium"
+            | "dirt_path"
+            | "farmland"
+            | "crimson_nylium"
+            | "warped_nylium"
+            | "hay_block"
+            | "bone_block"
+            | "quartz_pillar"
+            | "purpur_pillar"
+            | "basalt"
+            | "polished_basalt"
+            | "bamboo_block"
+            | "stripped_bamboo_block"
+            | "pearlescent_froglight"
+            | "verdant_froglight"
+            | "ochre_froglight"
+            | "dried_kelp_block"
+            | "lodestone"
+            | "target"
+            | "melon"
+            | "pumpkin"
+            | "carved_pumpkin"
+            | "jack_o_lantern"
+            | "creaking_heart"
+            | "ancient_debris"
+            | "reinforced_deepslate"
+            | "bookshelf"
+            | "chiseled_bookshelf"
+            | "barrel"
+            | "bee_nest"
+            | "beehive"
+            | "crafting_table"
+            | "smithing_table"
+            | "fletching_table"
+            | "cartography_table"
+            | "loom"
+            | "jukebox"
+            | "note_block"
+            | "tnt"
+            | "sandstone"
+            | "red_sandstone"
+            | "cut_sandstone"
+            | "cut_red_sandstone"
+            | "chiseled_sandstone"
+            | "chiseled_red_sandstone"
+            | "quartz_block"
+            | "chiseled_quartz_block"
+    ) || stem.ends_with("_nylium")
+        || ((stem.ends_with("_stem") || stem.ends_with("_log") || stem.ends_with("_hyphae"))
+            && !stem.contains("mushroom")
+            && !stem.contains("chorus")
+            && !stem.contains("attached")
+            && !stem.contains("pumpkin")
+            && !stem.contains("campfire"))
+}
+
+fn sided_cube_texture_rgb(stem: &str, dirs: &[PathBuf]) -> Option<[u8; 3]> {
+    let side = average_named_png(&format!("{stem}_side"), dirs)
+        .or_else(|| average_named_png(stem, dirs));
+    let top = average_named_png(&format!("{stem}_top"), dirs).or_else(|| {
+        // Nylium / farmland: bare stem is the top face.
+        if matches!(stem, "warped_nylium" | "crimson_nylium" | "farmland")
+            || stem.ends_with("_nylium")
+        {
+            average_named_png(stem, dirs)
+        } else {
+            None
+        }
+    });
+    let bottom = average_named_png(&format!("{stem}_bottom"), dirs)
+        .or_else(|| match stem {
+            "grass_block" | "podzol" | "mycelium" | "dirt_path" | "farmland" => {
+                average_named_png("dirt", dirs)
             }
+            "warped_nylium" | "crimson_nylium" => average_named_png("netherrack", dirs),
+            _ => None,
+        })
+        .or(top);
+
+    match (side, top) {
+        (Some(s), Some(t)) => {
+            let b = bottom.unwrap_or(t);
+            // Pale oak / cherry ends vs bark differ by ~100–190 RGB. Blending still
+            // pulls match colour toward end grain and steals pale wool/terracotta
+            // slots. When top≠side is large, match the side look (4 faces).
+            if rgb_dist_sq(s, t) > 35 * 35 {
+                return Some(s);
+            }
+            Some(weighted_rgb(&[(s, 4), (t, 1), (b, 1)]))
+        }
+        (Some(s), None) => Some(s),
+        (None, Some(t)) => Some(t),
+        (None, None) => None,
+    }
+}
+
+fn rgb_dist_sq(a: [u8; 3], b: [u8; 3]) -> i32 {
+    let dr = i32::from(a[0]) - i32::from(b[0]);
+    let dg = i32::from(a[1]) - i32::from(b[1]);
+    let db = i32::from(a[2]) - i32::from(b[2]);
+    dr * dr + dg * dg + db * db
+}
+
+fn weighted_rgb(parts: &[([u8; 3], u32)]) -> [u8; 3] {
+    let mut r = 0u64;
+    let mut g = 0u64;
+    let mut b = 0u64;
+    let mut w = 0u64;
+    for (rgb, weight) in parts {
+        let weight = u64::from(*weight);
+        r += u64::from(rgb[0]) * weight;
+        g += u64::from(rgb[1]) * weight;
+        b += u64::from(rgb[2]) * weight;
+        w += weight;
+    }
+    if w == 0 {
+        return [0, 0, 0];
+    }
+    [(r / w) as u8, (g / w) as u8, (b / w) as u8]
+}
+
+fn average_named_png(name: &str, dirs: &[PathBuf]) -> Option<[u8; 3]> {
+    for dir in dirs {
+        let path = dir.join(format!("{name}.png"));
+        if let Some(rgb) = average_opaque_png(&path) {
+            return Some(rgb);
         }
     }
     None
 }
 
 fn block_texture_stem_candidates(stem: &str) -> Vec<String> {
+    // Side before top: columns without a bare PNG (hay, bone, basalt…) must not
+    // match their end-grain colour when sides are what you mostly see.
     let mut names = vec![
         stem.to_string(),
-        format!("{stem}_top"),
         format!("{stem}_side"),
+        format!("{stem}_top"),
     ];
     for extra in extra_block_texture_stems(stem) {
         if !names.iter().any(|existing| existing == &extra) {
-            names.push(extra);
+            names.push(extra.clone());
+            names.push(format!("{extra}_side"));
+            names.push(format!("{extra}_top"));
         }
     }
     names
@@ -643,5 +830,58 @@ mod tests {
         let oak = cube_texture_rgb("oak_planks").expect("oak_planks.png");
         let cherry = cube_texture_rgb("cherry_planks").expect("cherry_planks.png");
         assert_ne!(oak, cherry, "wood types must not share a baked average");
+    }
+
+    #[test]
+    fn cube_texture_rgb_weights_log_sides_over_end_grain() {
+        let dirs = block_texture_search_dirs();
+        let side = average_named_png("oak_log", &dirs).expect("oak_log.png");
+        let top = average_named_png("oak_log_top", &dirs).expect("oak_log_top.png");
+        let matched = cube_texture_rgb("oak_log").expect("oak_log match");
+        let side_dist = colour_dist(matched, side);
+        let top_dist = colour_dist(matched, top);
+        assert!(
+            side_dist < top_dist,
+            "log match should sit nearer bark ({side_dist}) than end grain ({top_dist}); got {matched:?}"
+        );
+    }
+
+    #[test]
+    fn cube_texture_rgb_uses_bark_when_end_grain_diverges() {
+        let dirs = block_texture_search_dirs();
+        let side = average_named_png("pale_oak_log", &dirs).expect("pale_oak_log.png");
+        let matched = cube_texture_rgb("pale_oak_log").expect("pale_oak_log match");
+        assert_eq!(
+            matched, side,
+            "high top≠side columns should match bark only, not a blend toward end grain"
+        );
+    }
+
+    #[test]
+    fn cube_texture_rgb_prefers_hay_side_not_top() {
+        let dirs = block_texture_search_dirs();
+        let side = average_named_png("hay_block_side", &dirs).expect("hay_block_side.png");
+        let top = average_named_png("hay_block_top", &dirs).expect("hay_block_top.png");
+        let matched = cube_texture_rgb("hay_block").expect("hay_block match");
+        // Mild Δ → face-weighted; still nearer side than a pure top pick.
+        assert!(
+            colour_dist(matched, side) <= colour_dist(matched, top),
+            "hay should not match end grain alone; got {matched:?}"
+        );
+        assert_ne!(matched, top, "hay must not use top-only match colour");
+    }
+
+    #[test]
+    fn cube_texture_rgb_aliases_wood_to_log_bark() {
+        let wood = cube_texture_rgb("oak_wood").expect("oak_wood → oak_log");
+        let log = cube_texture_rgb("oak_log").expect("oak_log");
+        assert_eq!(wood, log, "bark cubes must reuse the log side average");
+    }
+
+    fn colour_dist(a: [u8; 3], b: [u8; 3]) -> i32 {
+        let dr = i32::from(a[0]) - i32::from(b[0]);
+        let dg = i32::from(a[1]) - i32::from(b[1]);
+        let db = i32::from(a[2]) - i32::from(b[2]);
+        dr * dr + dg * dg + db * db
     }
 }

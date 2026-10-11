@@ -1,4 +1,4 @@
-import { fetchCapeTexture } from '../../api'
+import { entityTextureCandidates } from '../../minecraftAssets'
 import { decodeImageRgba, type RgbaImage } from './decodeImage'
 import { SKIN_MAX_EDGE } from './skinModel'
 
@@ -31,8 +31,9 @@ export const OFFICIAL_CAPE_GROUPS: { id: OfficialCapeGroup; label: string }[] = 
 ]
 
 /**
- * Official Java / cross-platform cape textures from textures.minecraft.net.
- * Hashes are Mojang’s public CDN ids (same files the launcher uses).
+ * Official Java / cross-platform cape textures. PNGs ship under
+ * `entity-textures/cape/{id}.png` (same pack the installer bundles).
+ * Hashes document the Mojang CDN source used when refreshing the pack.
  */
 export const OFFICIAL_CAPES: OfficialCape[] = [
   { id: 'migrator', name: 'Migrator', group: 'popular', hash: '2340c0e03dd24a11b15a8b33c2a7e9e32abb2051b2481d0ba7defd635ca7a933' },
@@ -77,8 +78,9 @@ export function officialCapeById(id: string): OfficialCape | undefined {
   return OFFICIAL_CAPES.find((cape) => cape.id === id)
 }
 
-export function officialCapeTextureUrl(cape: OfficialCape): string {
-  return `https://textures.minecraft.net/texture/${cape.hash}`
+/** Relative path under `entity-textures/` for a bundled official cape. */
+export function officialCapeRelPath(cape: OfficialCape): string {
+  return `cape/${cape.id}.png`
 }
 
 /**
@@ -139,27 +141,22 @@ export function capePngSize(bytes: Uint8Array): { width: number; height: number 
 export async function fetchOfficialCape(cape: OfficialCape): Promise<Uint8Array> {
   const hit = fetchedCapes.get(cape.id)
   if (hit) return hit
-  let bytes: Uint8Array
-  try {
-    bytes = await fetchCapeTexture(cape.hash)
-  } catch (nativeError) {
+  const urls = entityTextureCandidates(officialCapeRelPath(cape))
+  let lastError = `Missing bundled ${cape.name} cape (${officialCapeRelPath(cape)})`
+  for (const url of urls) {
     try {
-      const response = await fetch(officialCapeTextureUrl(cape))
-      if (!response.ok) {
-        throw new Error(`Could not download ${cape.name} cape (${response.status})`)
-      }
-      bytes = new Uint8Array(await response.arrayBuffer())
-    } catch (browserError) {
-      const message =
-        nativeError instanceof Error ? nativeError.message : String(nativeError)
-      const extra = browserError instanceof Error ? browserError.message : String(browserError)
-      throw new Error(message.includes('download') ? message : extra)
+      const response = await fetch(url)
+      if (!response.ok) continue
+      const bytes = new Uint8Array(await response.arrayBuffer())
+      if (bytes.length < 64) continue
+      await inspectCapePng(bytes)
+      fetchedCapes.set(cape.id, bytes)
+      return bytes
+    } catch (error) {
+      lastError = error instanceof Error ? error.message : String(error)
     }
   }
-  if (bytes.length < 64) throw new Error(`${cape.name} cape download was empty`)
-  await inspectCapePng(bytes)
-  fetchedCapes.set(cape.id, bytes)
-  return bytes
+  throw new Error(lastError)
 }
 
 /** Vanilla cape box: 10×16×1 at texOffs(0,0). Outside face people see from behind is (1,1). */

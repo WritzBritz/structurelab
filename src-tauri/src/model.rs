@@ -63,6 +63,31 @@ impl BlockState {
             properties: parsed,
         })
     }
+
+    /// Statue / structure paste: keep foliage from decaying after place.
+    /// Leaves with `persistent=false` despawn when far from logs; player-placed
+    /// leaves use `persistent=true`. Coral blocks still need water — there is
+    /// no blockstate that keeps them alive in air (default-disable those).
+    pub fn stabilize_for_structure_paste(mut self) -> Self {
+        let id = self
+            .name
+            .strip_prefix("minecraft:")
+            .unwrap_or(self.name.as_str());
+        if id.ends_with("_leaves") {
+            self.properties
+                .insert("persistent".to_string(), "true".to_string());
+        }
+        // Coral plants / fans: waterlogged helps only while surrounded by water;
+        // still prefer it so datapack setblock matches survival placement.
+        if (id.ends_with("_coral") || id.ends_with("_coral_fan") || id.ends_with("_coral_wall_fan"))
+            && !id.ends_with("_coral_block")
+            && !id.starts_with("dead_")
+        {
+            self.properties
+                .insert("waterlogged".to_string(), "true".to_string());
+        }
+        self
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -380,5 +405,18 @@ mod tests {
             "minecraft:oak_stairs[facing=north,half=bottom]"
         );
         assert!(BlockState::parse("not namespaced").is_none());
+    }
+
+    #[test]
+    fn stabilize_leaves_for_structure_paste() {
+        let state = BlockState::parse(
+            "minecraft:oak_leaves[distance=1,persistent=false,waterlogged=false]",
+        )
+        .unwrap()
+        .stabilize_for_structure_paste();
+        assert_eq!(
+            state.properties.get("persistent").map(String::as_str),
+            Some("true")
+        );
     }
 }

@@ -1,4 +1,9 @@
-import type { MapColor, PaletteFile, StatueBlockPack } from './types'
+import {
+  DEFAULT_DISABLED_STATUE_BLOCKS,
+  type MapColor,
+  type PaletteFile,
+  type StatueBlockPack,
+} from './types'
 
 export const materialCategories = [
   'all',
@@ -461,7 +466,10 @@ export function applyMaterialPreset(
  * Map colour comes from looking down. These blocks' colour/texture is a unique
  * top (or stem end) while the sides are a different hue — Warped Nylium is the
  * textbook case (cyan top, netherrack sides). Fine for maps and floor art;
- * wrong for statues and wall pixel art.
+ * wrong for statues and wall pixel art unless match colour is face-weighted.
+ *
+ * Strong top≠side only — milder multi-face cubes stay pickable; Rust still
+ * face-weights their match RGB.
  */
 export function isTopFaceColourBlock(state: string): boolean {
   const id = baseBlockId(state).replace('minecraft:', '')
@@ -475,12 +483,32 @@ export function isTopFaceColourBlock(state: string): boolean {
     || id === 'bone_block'
     || id === 'quartz_pillar'
     || id === 'purpur_pillar'
+    || id === 'basalt'
+    || id === 'polished_basalt'
+    || id === 'bamboo_block'
+    || id === 'stripped_bamboo_block'
+    || id === 'pearlescent_froglight'
+    || id === 'verdant_froglight'
+    || id === 'ochre_froglight'
+    || id === 'dried_kelp_block'
+    || id === 'lodestone'
+    || id === 'target'
+    || id === 'melon'
+    || id === 'pumpkin'
+    || id === 'carved_pumpkin'
+    || id === 'jack_o_lantern'
+    || id === 'creaking_heart'
+    || id === 'ancient_debris'
+    || id === 'reinforced_deepslate'
+    || id === 'bookshelf'
+    || id === 'chiseled_bookshelf'
     || id.endsWith('_nylium')
-    || ((id.endsWith('_stem') || id.endsWith('_log') || id.endsWith('_hyphae'))
+    || ((id.endsWith('_stem') || id.endsWith('_log') || id.endsWith('_hyphae') || id.endsWith('_wood'))
       && !id.includes('mushroom')
       && !id.includes('chorus')
       && !id.includes('attached')
-      && !id.includes('pumpkin'))
+      && !id.includes('pumpkin')
+      && !id.includes('campfire'))
   )
 }
 
@@ -780,7 +808,7 @@ export function applyStatueMaterialPreset(
         : [...fluidColorIds(palette), ...poorModelColorIds(palette)],
     blockOverrides: {},
     blockPack: statuePresetToPack(preset),
-    disabledBlocks: [],
+    disabledBlocks: [...DEFAULT_DISABLED_STATUE_BLOCKS],
     blockSubstitutions: {},
   }
 }

@@ -27,9 +27,11 @@ import {
   buildPlayerSkinGroup,
   skinBendPoseFromVisual,
   skinBendVisualAngles,
+  skinLimbSupportsBend,
   skinObjectInvertsBend,
   SKIN_PREVIEW_SCALE,
   type CharacterPoseLike,
+  type SkinLimbId,
 } from './playerSkinPreview'
 import { skinPoseBendLimbId, skinPoseLimbBase } from './characterPose'
 import { decodeImageRgba, ensureBrowserTexture, mimeForTextureBytes, sniffImageMime, textureLooksPixelArt } from './decodeImage'
@@ -298,6 +300,7 @@ export default function MeshPreviewViewer({
     }
 
     let disposed = false
+    let previewAborted = false
     let frame = 0
     let renderer: THREE.WebGLRenderer | null = null
     let nav: FreeCameraNavigation | null = null
@@ -305,6 +308,7 @@ export default function MeshPreviewViewer({
     const clock = new THREE.Clock()
     const objectUrls: string[] = []
     const texturesToDispose: THREE.Texture[] = []
+    const previewCancels: Array<() => void> = []
     const scene = new THREE.Scene()
     scene.background = new THREE.Color(0x151b24)
     const camera = new THREE.PerspectiveCamera(50, 1, 0.05, 5000)
@@ -484,6 +488,8 @@ export default function MeshPreviewViewer({
           const part = partsRef.current.find((entry) => entry.id === selectedIdRef.current)
           const group = part ? groupsRef.current.get(part.id) : undefined
           if (!part || !group) return
+          // Whole-model placement drags the outer group — do not treat as pose.
+          if (isWholePartPlacement(part, selectedLimbRef.current)) return
           if (part.useMeshBones) {
             const live = liveMeshBonePoseFromGizmo(part)
             if (!live) return
@@ -500,6 +506,13 @@ export default function MeshPreviewViewer({
               const player = group.getObjectByName('player-skin')
               if (player) applySkinPoseToGroup(player, meshBonePoseToSkinPose(live))
             }
+            return
+          }
+          if (part.kind === 'skin') {
+            const live = liveSkinPoseFromGizmo(part)
+            if (!live) return
+            const player = group.getObjectByName('player-skin')
+            if (player) applySkinPoseToGroup(player, live)
             return
           }
           if (part.meshObjectNames?.length) {
@@ -526,6 +539,9 @@ export default function MeshPreviewViewer({
             },
             trackUrl: (url) => objectUrls.push(url),
             trackTexture: (texture) => texturesToDispose.push(texture),
+            registerCancel: (cancel) => {
+              previewCancels.push(cancel)
+            },
           })
           if (disposed) {
             abortBootGl()
@@ -571,6 +587,15 @@ export default function MeshPreviewViewer({
           })
         }
       } catch (err) {
+        const aborted =
+          disposed
+          || previewAborted
+          || (err instanceof DOMException && err.name === 'AbortError')
+          || (err instanceof Error && /preview aborted/i.test(err.message))
+        if (aborted) {
+          if (!disposed) onProgress?.(1, 'Preview aborted')
+          return
+        }
         if (!disposed) {
           const message = String(err)
           if (/triangle|pending mimodel|no mesh|empty/i.test(message)) {
@@ -681,6 +706,12 @@ export default function MeshPreviewViewer({
             const nextLimbId = baseLimb ?? handleLimbId
             const sameLimb = nextLimbId != null && nextLimbId === selectedLimbRef.current
             if (!sameLimb || !gizmoShouldCapture(transform, gizmoHit, meshHit, selectedLimbRef.current, meshPick?.limbId ?? null)) {
+              if (
+                (!sameLimb || handlePartId !== selectedIdRef.current)
+                && api.transform?.object
+              ) {
+                syncLimbFromGizmo()
+              }
               if (handlePartId) onSelectRef.current?.(handlePartId)
               if (nextLimbId) onSelectLimbRef.current?.(nextLimbId)
               event.stopPropagation()
@@ -696,10 +727,19 @@ export default function MeshPreviewViewer({
 
         if (meshPick) {
           const previewPart = partsRef.current.find((entry) => entry.id === meshPick.partId)
+          // Commit the active joint before retargeting — a missed mouseUp used
+          // to leave the drag uncommitted so the limb snapped back to rest.
+          const limbChanging =
+            meshPick.limbId !== selectedLimbRef.current
+            || meshPick.partId !== selectedIdRef.current
+          if (limbChanging && api.transform?.object) {
+            syncLimbFromGizmo()
+          }
           onSelectRef.current?.(meshPick.partId)
           onSelectLimbRef.current?.(meshPick.limbId)
-          if (meshPick.skinHandle === 'bend') setGizmoModeRef.current('bend')
-          else if (meshPick.skinHandle === 'rot') setGizmoModeRef.current('rotate')
+          // Toolbar owns Rotate/Bend. Auto-flipping on lower-arm clicks left Bend
+          // sticky on head/cape (no bend channel) so gizmo edits wrote bend and
+          // snapped back to rest when the pose reapplied rot.
           event.stopPropagation()
           if (
             !previewPart?.sourceLabel?.startsWith('Minecraft')
@@ -802,6 +842,20 @@ export default function MeshPreviewViewer({
     })
 
     return () => {
+      for (const cancel of previewCancels) {
+        try {
+          cancel()
+        } catch {
+          /* ignore */
+        }
+      }
+      previewCancels.length = 0
+      if (!disposed) {
+        previewAborted = true
+        // Bypass `report` — it ignores calls after disposed, but parents need
+        // a terminal label so the load overlay can clear on remount/tab switch.
+        onProgress?.(1, 'Preview aborted')
+      }
       disposed = true
       cancelAnimationFrame(frame)
       cleanupExtras?.()
@@ -895,7 +949,8 @@ export default function MeshPreviewViewer({
         if (api?.dragging) continue
         applyMeshBonePoseToPreview(group, part.bonePose, { deform: meshSkinModeOf(part) })
       } else if (part.meshObjectNames?.length) {
-        // Always apply — bend morphs verts; rotate/pos match the gizmo after each commit.
+        // Same as skins/bones: live gizmo owns the joint until drag end.
+        if (api?.dragging) continue
         applyMeshPartPoseToGroup(group, part.pose as MeshPartPose | null | undefined)
       }
     }
@@ -995,9 +1050,13 @@ export default function MeshPreviewViewer({
     part: MeshPreviewPart | undefined,
     limb: string | null = selectedLimbRef.current,
   ): boolean {
-    if (!part || part.kind === 'skin' || part.useMeshBones) return false
-    if (!part.meshObjectNames?.length) return true
-    return limb === 'root'
+    if (!part) return false
+    // Mesh-bone Root stays a bone channel. Classic skins must use scene
+    // placement for Root — convert zeros skinPose.root.pos, so preview-only
+    // moves looked reset after voxelize. Catalog cubes use Root the same way.
+    if (part.useMeshBones) return false
+    if (part.kind === 'skin' || part.meshObjectNames?.length) return limb === 'root'
+    return true
   }
 
   function syncPlacementFromGizmo(part: MeshPreviewPart, group: THREE.Object3D) {
@@ -1009,13 +1068,18 @@ export default function MeshPreviewViewer({
       Math.round(THREE.MathUtils.radToDeg(group.rotation.y) * 10) / 10,
       Math.round(THREE.MathUtils.radToDeg(group.rotation.z) * 10) / 10,
     ]
+    // Block-grid placement — convert_scene expects i32 offsets.
     const position: [number, number, number] = start
       ? [
-          Math.round((start.partPos[0] + group.position.x - start.pos.x) * 10) / 10,
-          Math.round((start.partPos[1] + group.position.y - start.pos.y) * 10) / 10,
-          Math.round((start.partPos[2] + group.position.z - start.pos.z) * 10) / 10,
+          Math.round(start.partPos[0] + group.position.x - start.pos.x),
+          Math.round(start.partPos[1] + group.position.y - start.pos.y),
+          Math.round(start.partPos[2] + group.position.z - start.pos.z),
         ]
-      : [part.positionX, part.positionY, part.positionZ]
+      : [
+          Math.round(part.positionX),
+          Math.round(part.positionY),
+          Math.round(part.positionZ),
+        ]
     onPartPlacementRef.current?.(position, rotation)
   }
 
@@ -1037,8 +1101,22 @@ export default function MeshPreviewViewer({
     const isSkin = part?.kind === 'skin'
     const useMeshBones = Boolean(part?.useMeshBones)
     if (mode === 'rotate' || mode === 'bend') {
-      const channel = poseGizmoChannel(mode)
-      const writeLimb = poseGizmoWriteLimb(mode, limbRaw, useMeshBones, part ? rigOf(part.id) : null)
+      let channel = poseGizmoChannel(mode)
+      // Head / root / catalog have no bend channel — never stash a rotate into bend.
+      if (channel === 'bend') {
+        const canBend = useMeshBones
+          ? meshBoneSupportsBend(limb, part ? rigOf(part.id) : null)
+          : isSkin
+            ? skinLimbSupportsBend(limb as SkinLimbId)
+            : !part?.sourceLabel?.startsWith('Minecraft')
+        if (!canBend) channel = 'rot'
+      }
+      const writeLimb = poseGizmoWriteLimb(
+        channel === 'bend' ? 'bend' : 'rotate',
+        limbRaw,
+        useMeshBones,
+        part ? rigOf(part.id) : null,
+      )
       if (useMeshBones && part) {
         const raw = meshBoneChannelFromGizmo(part, limb, channel, object)
         if (!raw || !raw.every(Number.isFinite)) return
@@ -1068,6 +1146,75 @@ export default function MeshPreviewViewer({
     ]
     if (!pos.every(Number.isFinite)) return
     onLimbPoseRef.current(limb, 'pos', pos)
+  }
+
+  /** Pose snapshot with the active gizmo angles applied (classic PNG skins). */
+  function liveSkinPoseFromGizmo(part: MeshPreviewPart): CharacterPoseLike | null {
+    const api = sceneApiRef.current
+    const limbRaw = selectedLimbRef.current
+    const object = api?.transform?.object
+    if (!api?.transform || !limbRaw || !object || part.kind !== 'skin' || part.useMeshBones) {
+      return null
+    }
+    const limb = poseGizmoHostLimb(limbRaw)
+    const empty = {
+      pos: [0, 0, 0] as [number, number, number],
+      rot: [0, 0, 0] as [number, number, number],
+      bend: [0, 0, 0] as [number, number, number],
+    }
+    const source = part.pose
+    const pose: CharacterPoseLike = {
+      root: source?.root
+        ? {
+            pos: [...source.root.pos] as [number, number, number],
+            rot: [...source.root.rot] as [number, number, number],
+            bend: [...(source.root.bend ?? empty.bend)] as [number, number, number],
+          }
+        : { ...empty },
+      parts: Object.fromEntries(
+        Object.entries(source?.parts ?? {}).map(([key, value]) => [
+          key,
+          {
+            pos: [...value.pos] as [number, number, number],
+            rot: [...value.rot] as [number, number, number],
+            bend: [...value.bend] as [number, number, number],
+          },
+        ]),
+      ),
+    }
+    const mode = gizmoModeRef.current
+    if (mode === 'rotate' || mode === 'bend') {
+      const channel = poseGizmoChannel(mode)
+      const [rawX, rawY, rawZ] = eulerDegreesFromObject(object)
+      if (![rawX, rawY, rawZ].every(Number.isFinite)) return pose
+      let angles = quantizeDegrees([rawX, rawY, rawZ])
+      if (channel === 'bend') {
+        angles = skinBendPoseFromVisual(angles, skinObjectInvertsBend(object))
+      }
+      if (limb === 'root') {
+        return { ...pose, root: { ...empty, ...pose.root, [channel]: angles } }
+      }
+      const current = pose.parts[limb] ?? empty
+      return {
+        ...pose,
+        parts: { ...pose.parts, [limb]: { ...current, [channel]: angles } },
+      }
+    }
+    const base =
+      (object.userData.baseLocal as [number, number, number] | undefined)
+      ?? (limb === 'root' ? [0, 0, 0] : [object.position.x, object.position.y, object.position.z])
+    const snap = (value: number) => Math.round((value / SKIN_PREVIEW_SCALE) * 10) / 10
+    const pos: [number, number, number] = [
+      snap(object.position.x - base[0]),
+      snap(object.position.y - base[1]),
+      snap(object.position.z - base[2]),
+    ]
+    if (!pos.every(Number.isFinite)) return pose
+    if (limb === 'root') {
+      return { ...pose, root: { ...empty, ...pose.root, pos } }
+    }
+    const current = pose.parts[limb] ?? empty
+    return { ...pose, parts: { ...pose.parts, [limb]: { ...current, pos } } }
   }
 
   /** Pose snapshot with the active gizmo angles applied (for live mesh-bone preview). */
@@ -1209,6 +1356,8 @@ export default function MeshPreviewViewer({
     api.invalidate()
     const { transform, boxHelper } = api
     try {
+      // Re-seeding from committed pose mid-drag snaps the joint back to rest.
+      if (api.dragging) return
       if (navigationModeRef.current === 'free') {
         transform.enabled = false
         transform.detach()
@@ -1265,7 +1414,16 @@ export default function MeshPreviewViewer({
         }
       }
       if (target && partId && target.parent) {
-        if (!placeWhole && (part?.kind === 'skin' || part?.useMeshBones || part?.meshObjectNames?.length)) {
+        if (placeWhole) {
+          transform.attach(target)
+          transform.getHelper().visible = true
+          if (boxHelper) {
+            boxHelper.setFromObject(target)
+            boxHelper.visible = true
+          }
+          return
+        }
+        if (part?.kind === 'skin' || part?.useMeshBones || part?.meshObjectNames?.length) {
           // Seed joint helper from the active pose channel so gizmo readback stays clean.
           if (
             part.useMeshBones
@@ -1419,9 +1577,8 @@ export default function MeshPreviewViewer({
   )
   const showPartPlacement = Boolean(
     selectedPart
-    && selectedPart.kind !== 'skin'
     && !selectedPart.useMeshBones
-    && (!selectedPart.meshObjectNames?.length || selectedLimbId === 'root'),
+    && selectedLimbId === 'root',
   )
 
   // Leaving bone-rig mode must not keep the elbow/knee Bend tool sticky on classic skins.
@@ -1436,12 +1593,26 @@ export default function MeshPreviewViewer({
 
   // Rotate / Bend are chosen on the toolbar. Clicking upper vs lower arm
   // only changes which limb is selected; it does not flip the tool.
+  const limbAllowsBend = (() => {
+    if (!selectedLimbId || showPartPlacement || catalogRotateOnly) return false
+    const host = skinPoseLimbBase(selectedLimbId)
+    if (host === 'root') return false
+    if (selectedPart?.useMeshBones) {
+      return meshBoneSupportsBend(host, selectedRig)
+    }
+    if (selectedPart?.kind === 'skin') {
+      return skinLimbSupportsBend(host as SkinLimbId)
+    }
+    // Catalog cubes / rigid parts: rotate only (no stretch bend).
+    if (selectedPart?.sourceLabel?.startsWith('Minecraft')) return false
+    return true
+  })()
 
   useEffect(() => {
-    if ((showPartPlacement || catalogRotateOnly) && gizmoMode === 'bend') {
+    if (gizmoMode === 'bend' && !limbAllowsBend) {
       setGizmoMode('rotate')
     }
-  }, [showPartPlacement, catalogRotateOnly, gizmoMode])
+  }, [showPartPlacement, catalogRotateOnly, gizmoMode, limbAllowsBend])
 
   return (
     <div className="mesh-preview-host">
@@ -1468,7 +1639,7 @@ export default function MeshPreviewViewer({
                     value: 'bend' as const,
                     label: 'Bend',
                     title: 'Bend this limb at the joint (B)',
-                    disabled: !showRig || !selectedLimbId || skinPoseLimbBase(selectedLimbId) === 'root',
+                    disabled: !showRig || !limbAllowsBend,
                   }]
                 : []),
             ]}
@@ -1559,10 +1730,11 @@ async function loadPartGroup(
     onProgress: (ratio: number, label: string) => void
     trackUrl: (url: string) => void
     trackTexture: (texture: THREE.Texture) => void
+    registerCancel?: (cancel: () => void) => void
   },
 ): Promise<{ group: THREE.Group; label: string } | null> {
   const group = new THREE.Group()
-  const { onProgress, trackUrl, trackTexture } = helpers
+  const { onProgress, trackUrl, trackTexture, registerCancel } = helpers
 
   if (part.kind === 'skin') {
     if (part.bytes.length === 0) return null
@@ -1683,7 +1855,7 @@ async function loadPartGroup(
     return null
   }
 
-  const result = await parseObjInWorker(
+  const { promise, cancel } = parseObjInWorker(
     objBytes,
     part.mtlBytes ?? null,
     part.textures ?? {},
@@ -1692,6 +1864,8 @@ async function loadPartGroup(
       skipOutlierFilter: Boolean(part.sourceLabel?.startsWith('Minecraft entity')),
     },
   )
+  registerCancel?.(cancel)
+  const result = await promise
   const groups = result.groups?.length
     ? result.groups
     : [{
@@ -2878,14 +3052,27 @@ function parseObjInWorker(
   textures: Record<string, Uint8Array>,
   onProgress: (ratio: number, label: string) => void,
   options?: { skipOutlierFilter?: boolean },
-): Promise<Extract<PreviewResponse, { ok: true }>> {
-  return new Promise((resolve, reject) => {
+): {
+  promise: Promise<Extract<PreviewResponse, { ok: true }>>
+  cancel: () => void
+} {
+  let worker: Worker | null = null
+  let settled = false
+  let aborted = false
+  let rejectFn: ((reason: unknown) => void) | null = null
+
+  const abortError = () => new DOMException('Preview aborted', 'AbortError')
+
+  const promise = new Promise<Extract<PreviewResponse, { ok: true }>>((resolve, reject) => {
+    rejectFn = reject
     void (async () => {
       try {
+        if (aborted) throw abortError()
         onProgress(0.08, 'Decoding textures…')
         const decodedTextures: Record<string, { width: number; height: number; data: ArrayBuffer }> = {}
         const transfer: ArrayBuffer[] = []
         for (const [name, bytes] of Object.entries(textures)) {
+          if (aborted) throw abortError()
           const image = await decodeImageRgba(bytes)
           if (!image) continue
           const pixels = new Uint8ClampedArray(image.data)
@@ -2901,7 +3088,8 @@ function parseObjInWorker(
           transfer.push(dataCopy)
         }
 
-        const worker = new Worker(new URL('./objPreview.worker.ts', import.meta.url), {
+        if (aborted) throw abortError()
+        worker = new Worker(new URL('./objPreview.worker.ts', import.meta.url), {
           type: 'module',
         })
         const id = Math.floor(Math.random() * 1_000_000_000)
@@ -2917,6 +3105,7 @@ function parseObjInWorker(
         }
 
         worker.onmessage = (event: MessageEvent) => {
+          if (aborted || settled) return
           const data = event.data
           if (data?.type === 'progress' && data.id === id) {
             onProgress(data.ratio, data.label)
@@ -2924,7 +3113,13 @@ function parseObjInWorker(
           }
           const response = data as PreviewResponse
           if (response.id !== id) return
-          worker.terminate()
+          settled = true
+          try {
+            worker?.terminate()
+          } catch {
+            /* ignore */
+          }
+          worker = null
           if (!response.ok) {
             reject(new Error(response.error))
             return
@@ -2932,7 +3127,14 @@ function parseObjInWorker(
           resolve(response)
         }
         worker.onerror = (event) => {
-          worker.terminate()
+          if (settled) return
+          settled = true
+          try {
+            worker?.terminate()
+          } catch {
+            /* ignore */
+          }
+          worker = null
           reject(event.error ?? new Error(event.message || 'Preview worker failed'))
         }
         worker.postMessage(
@@ -2947,10 +3149,33 @@ function parseObjInWorker(
           transfer,
         )
       } catch (error) {
+        if (settled) return
+        settled = true
+        try {
+          worker?.terminate()
+        } catch {
+          /* ignore */
+        }
+        worker = null
         reject(error instanceof Error ? error : new Error(String(error)))
       }
     })()
   })
+
+  const cancel = () => {
+    if (settled) return
+    aborted = true
+    settled = true
+    try {
+      worker?.terminate()
+    } catch {
+      /* ignore */
+    }
+    worker = null
+    rejectFn?.(abortError())
+  }
+
+  return { promise, cancel }
 }
 
 function srgbVertexColorsToLinear(colors: Float32Array): Float32Array {

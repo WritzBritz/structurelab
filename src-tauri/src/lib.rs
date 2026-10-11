@@ -13,7 +13,7 @@ use export::ExportFormat;
 use model::{BuildResult, ConvertOptions};
 use std::{
     fs::{self, OpenOptions},
-    io::{Read, Write},
+    io::Write,
     path::{Path, PathBuf},
     sync::Mutex,
 };
@@ -141,40 +141,6 @@ fn read_part_bytes(path: Option<&String>, base64: &str, label: &str) -> Result<V
     STANDARD
         .decode(base64)
         .map_err(|error| format!("invalid payload for '{label}': {error}"))
-}
-
-/// Download an official cape PNG from textures.minecraft.net (hash-only, avoids CORS).
-#[tauri::command]
-async fn fetch_cape_texture(hash: String) -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move || fetch_cape_texture_sync(hash))
-        .await
-        .map_err(|error| format!("cape download failed: {error}"))?
-}
-
-fn fetch_cape_texture_sync(hash: String) -> Result<String, String> {
-    let hash = hash.trim().to_ascii_lowercase();
-    if hash.len() != 64 || !hash.chars().all(|ch| ch.is_ascii_hexdigit()) {
-        return Err("invalid cape texture id".into());
-    }
-    let url = format!("https://textures.minecraft.net/texture/{hash}");
-    let response = ureq::get(&url)
-        .set("User-Agent", "StructureLab")
-        .timeout(std::time::Duration::from_secs(20))
-        .call()
-        .map_err(|error| format!("could not download cape: {error}"))?;
-    let mut bytes = Vec::new();
-    response
-        .into_reader()
-        .take(32 * 1024 * 1024 + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|error| format!("could not read cape: {error}"))?;
-    if bytes.len() > 32 * 1024 * 1024 {
-        return Err("cape PNG is too large to load".into());
-    }
-    if bytes.len() < 64 || bytes[0] != 0x89 || bytes[1] != b'P' || bytes[2] != b'N' || bytes[3] != b'G' {
-        return Err("cape download was not a PNG".into());
-    }
-    Ok(STANDARD.encode(bytes))
 }
 
 /// Create an empty staged file and return its absolute path.
@@ -815,6 +781,11 @@ async fn export_current(
     format: ExportFormat,
     path: PathBuf,
     litematic_map_subregions: Option<bool>,
+    datapack_name: Option<String>,
+    datapack_pattern: Option<String>,
+    datapack_blocks_per_tick: Option<u32>,
+    datapack_delay_ticks: Option<u32>,
+    datapack_random_seed: Option<u64>,
     state: tauri::State<'_, ProjectState>,
 ) -> Result<(), String> {
     let (build, options) = {
@@ -838,8 +809,37 @@ async fn export_current(
                 "build is missing a Minecraft DataVersion — convert again before exporting".into(),
             );
         }
+        let pattern = match datapack_pattern.as_deref().unwrap_or("instant") {
+            "instant" => export::DatapackPattern::Instant,
+            "optimal" => export::DatapackPattern::Optimal,
+            "layerYAsc" | "bottomToTop" => export::DatapackPattern::LayerYAsc,
+            "layerYDesc" | "topToBottom" => export::DatapackPattern::LayerYDesc,
+            "axisZAsc" | "northToSouth" => export::DatapackPattern::AxisZAsc,
+            "axisXDesc" | "eastToWest" => export::DatapackPattern::AxisXDesc,
+            "radialOut" => export::DatapackPattern::RadialOut,
+            "radialIn" => export::DatapackPattern::RadialIn,
+            "sphereOut" => export::DatapackPattern::SphereOut,
+            "sphereIn" => export::DatapackPattern::SphereIn,
+            "spiralOut" => export::DatapackPattern::SpiralOut,
+            "spiralIn" => export::DatapackPattern::SpiralIn,
+            "layerSpiral" => export::DatapackPattern::LayerSpiral,
+            "diagonal" => export::DatapackPattern::Diagonal,
+            "checker" => export::DatapackPattern::Checker,
+            "goldenSpiral" => export::DatapackPattern::GoldenSpiral,
+            "random" => export::DatapackPattern::Random,
+            other => {
+                return Err(format!("unknown datapack pattern: {other}"));
+            }
+        };
         let options = export::ExportOptions {
             litematic_map_subregions: litematic_map_subregions.unwrap_or(false),
+            datapack_name,
+            datapack: export::DatapackEncodeOptions {
+                pattern,
+                blocks_per_tick: datapack_blocks_per_tick.unwrap_or(16),
+                delay_ticks: datapack_delay_ticks.unwrap_or(0),
+                random_seed: datapack_random_seed.unwrap_or(0),
+            },
         };
         (build, options)
     };
@@ -901,7 +901,6 @@ fn run_main_app() {
             convert_model,
             convert_scene,
             export_current,
-            fetch_cape_texture,
             stage_bytes_begin,
             stage_bytes_append,
             stage_copy_from_path,

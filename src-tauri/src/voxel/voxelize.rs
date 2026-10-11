@@ -559,9 +559,14 @@ pub fn voxelize_mesh_with(
 
     bake_cell_colours(&mut grid, footprint.as_ref());
 
+    // Close 1-voxel raster misses before hollow/fill. At statue scale the mesh
+    // walk can leave pinholes; the old "skip huge interiors" path left them open.
+    seal_surface_pinholes(&mut grid);
+
     // Entity cubes are hollow 6-face boxes. Solid fill closes small in-cube gaps
-    // at native scale; hollow mode keeps only the outer shell (used for catalog
-    // entities). fill_enclosed_interiors also skips huge cavities at statue scale.
+    // at native scale; hollow mode keeps only the *exterior* shell (drops buried
+    // cells and cavity-facing walls). fill_enclosed_interiors also skips huge
+    // cavities at statue scale (but still seals tiny pockets).
     if !hollow {
         fill_enclosed_interiors(&mut grid);
     } else {
@@ -977,7 +982,8 @@ fn rasterize_triangle(
     let edge_ab = distance(a, b);
     let edge_bc = distance(b, c);
     let edge_ca = distance(c, a);
-    let steps = ((edge_ab.max(edge_bc).max(edge_ca) * 2.0).ceil() as i32).max(1);
+    // ~¼-voxel walk: half-voxel sampling left pinholes on large / edge-on faces.
+    let steps = ((edge_ab.max(edge_bc).max(edge_ca) * 4.0).ceil() as i32).max(1);
     for i in 0..=steps {
         let t = i as f32 / steps as f32;
         let ab = lerp(a, b, t);
@@ -992,7 +998,7 @@ fn rasterize_triangle(
             (Some(ua), Some(uc)) => Some(lerp2(ua, uc, t)),
             _ => None,
         };
-        let row_steps = ((distance(ab, ac) * 2.0).ceil() as i32).max(1);
+        let row_steps = ((distance(ab, ac) * 4.0).ceil() as i32).max(1);
         for j in 0..=row_steps {
             let u = j as f32 / row_steps as f32;
             let pos = lerp(ab, ac, u);
@@ -1026,7 +1032,7 @@ fn rasterize_triangle(
         ([b, c], [cb, cc], [uvb, uvc]),
         ([c, a], [cc, ca], [uvc, uva]),
     ] {
-        let edge_steps = ((distance(edge_pos[0], edge_pos[1]) * 3.0).ceil() as i32).max(1);
+        let edge_steps = ((distance(edge_pos[0], edge_pos[1]) * 4.0).ceil() as i32).max(1);
         for i in 0..=edge_steps {
             let t = i as f32 / edge_steps as f32;
             let pos = lerp(edge_pos[0], edge_pos[1], t);
@@ -1248,10 +1254,87 @@ fn write_stamp_at(
     true
 }
 
+fn aabb_index(min: [u32; 3], bw: usize, bl: usize, x: u32, y: u32, z: u32) -> usize {
+    let lx = (x - min[0]) as usize;
+    let ly = (y - min[1]) as usize;
+    let lz = (z - min[2]) as usize;
+    (ly * bl + lz) * bw + lx
+}
+
+fn six_neighbors(x: u32, y: u32, z: u32) -> [(u32, u32, u32); 6] {
+    [
+        (x.wrapping_sub(1), y, z),
+        (x + 1, y, z),
+        (x, y.wrapping_sub(1), z),
+        (x, y + 1, z),
+        (x, y, z.wrapping_sub(1)),
+        (x, y, z + 1),
+    ]
+}
+
+/// Empty cells inside the occupied AABB that can reach the AABB border (true exterior air).
+/// Enclosed cavities stay false — those face inward-only walls Hollow should drop.
+fn mark_aabb_exterior_air(grid: &VoxelGrid, min: [u32; 3], max: [u32; 3]) -> Vec<bool> {
+    let bw = (max[0] - min[0] + 1) as usize;
+    let bl = (max[2] - min[2] + 1) as usize;
+    let mut outside = vec![false; bw * ((max[1] - min[1] + 1) as usize) * bl];
+    let mut queue: VecDeque<(u32, u32, u32)> = VecDeque::new();
+
+    let mut seed = |x: u32, y: u32, z: u32| {
+        let i = aabb_index(min, bw, bl, x, y, z);
+        if grid.is_occupied(x, y, z) || outside[i] {
+            return;
+        }
+        outside[i] = true;
+        queue.push_back((x, y, z));
+    };
+
+    for y in min[1]..=max[1] {
+        for z in min[2]..=max[2] {
+            seed(min[0], y, z);
+            if max[0] > min[0] {
+                seed(max[0], y, z);
+            }
+        }
+    }
+    for y in min[1]..=max[1] {
+        for x in min[0]..=max[0] {
+            seed(x, y, min[2]);
+            if max[2] > min[2] {
+                seed(x, y, max[2]);
+            }
+        }
+    }
+    for z in min[2]..=max[2] {
+        for x in min[0]..=max[0] {
+            seed(x, min[1], z);
+            if max[1] > min[1] {
+                seed(x, max[1], z);
+            }
+        }
+    }
+
+    while let Some((x, y, z)) = queue.pop_front() {
+        for (nx, ny, nz) in six_neighbors(x, y, z) {
+            if nx < min[0] || ny < min[1] || nz < min[2] || nx > max[0] || ny > max[1] || nz > max[2]
+            {
+                continue;
+            }
+            let i = aabb_index(min, bw, bl, nx, ny, nz);
+            if grid.is_occupied(nx, ny, nz) || outside[i] {
+                continue;
+            }
+            outside[i] = true;
+            queue.push_back((nx, ny, nz));
+        }
+    }
+    outside
+}
+
 /// Flood empty cells that are not reachable from the occupied bounding box
 /// border, using the nearest occupied neighbour's colour. Closes hollow
-/// Minecraft cube shells. The 15% skip still uses the **logical** box volume
-/// so statue-scale entity cubes do not solid-fill.
+/// Minecraft cube shells. Large cavities (statue-scale shells) are left empty,
+/// but tiny enclosed pockets / pinholes are still filled.
 fn fill_enclosed_interiors(grid: &mut VoxelGrid) {
     let w = grid.width;
     let h = grid.height;
@@ -1264,88 +1347,14 @@ fn fill_enclosed_interiors(grid: &mut VoxelGrid) {
     };
     let volume = grid.volume() as f64;
     let bw = (max[0] - min[0] + 1) as usize;
-    let bh = (max[1] - min[1] + 1) as usize;
     let bl = (max[2] - min[2] + 1) as usize;
-    let count = bw * bh * bl;
-    let mut outside = vec![false; count];
-    let mut queue: VecDeque<(u32, u32, u32)> = VecDeque::new();
-    let idx = |x: u32, y: u32, z: u32| {
-        let lx = (x - min[0]) as usize;
-        let ly = (y - min[1]) as usize;
-        let lz = (z - min[2]) as usize;
-        (ly * bl + lz) * bw + lx
-    };
-
-    let seed = |x: u32,
-                y: u32,
-                z: u32,
-                grid: &VoxelGrid,
-                outside: &mut [bool],
-                queue: &mut VecDeque<(u32, u32, u32)>| {
-        let i = idx(x, y, z);
-        if grid.is_occupied(x, y, z) || outside[i] {
-            return;
-        }
-        outside[i] = true;
-        queue.push_back((x, y, z));
-    };
-
-    for y in min[1]..=max[1] {
-        for z in min[2]..=max[2] {
-            seed(min[0], y, z, grid, &mut outside, &mut queue);
-            if max[0] > min[0] {
-                seed(max[0], y, z, grid, &mut outside, &mut queue);
-            }
-        }
-    }
-    for y in min[1]..=max[1] {
-        for x in min[0]..=max[0] {
-            seed(x, y, min[2], grid, &mut outside, &mut queue);
-            if max[2] > min[2] {
-                seed(x, y, max[2], grid, &mut outside, &mut queue);
-            }
-        }
-    }
-    for z in min[2]..=max[2] {
-        for x in min[0]..=max[0] {
-            seed(x, min[1], z, grid, &mut outside, &mut queue);
-            if max[1] > min[1] {
-                seed(x, max[1], z, grid, &mut outside, &mut queue);
-            }
-        }
-    }
-
-    let neighbors = |x: u32, y: u32, z: u32| {
-        [
-            (x.wrapping_sub(1), y, z),
-            (x + 1, y, z),
-            (x, y.wrapping_sub(1), z),
-            (x, y + 1, z),
-            (x, y, z.wrapping_sub(1)),
-            (x, y, z + 1),
-        ]
-    };
-
-    while let Some((x, y, z)) = queue.pop_front() {
-        for (nx, ny, nz) in neighbors(x, y, z) {
-            if nx < min[0] || ny < min[1] || nz < min[2] || nx > max[0] || ny > max[1] || nz > max[2]
-            {
-                continue;
-            }
-            let i = idx(nx, ny, nz);
-            if grid.is_occupied(nx, ny, nz) || outside[i] {
-                continue;
-            }
-            outside[i] = true;
-            queue.push_back((nx, ny, nz));
-        }
-    }
+    let outside = mark_aabb_exterior_air(grid, min, max);
 
     let mut interior: Vec<(u32, u32, u32)> = Vec::new();
     for y in min[1]..=max[1] {
         for z in min[2]..=max[2] {
             for x in min[0]..=max[0] {
-                let i = idx(x, y, z);
+                let i = aabb_index(min, bw, bl, x, y, z);
                 if !grid.is_occupied(x, y, z) && !outside[i] {
                     interior.push((x, y, z));
                 }
@@ -1358,15 +1367,59 @@ fn fill_enclosed_interiors(grid: &mut VoxelGrid) {
 
     // Hollow shell meshes scaled to fill a large grid (Minecraft entity cubes at
     // statue size) seal off most of the volume. Filling that cavity would
-    // solid-paint the entire bounding box with the nearest limb colour.
+    // solid-paint the entire bounding box with the nearest limb colour — but
+    // still close small enclosed pockets (raster pinholes) so surfaces stay sealed.
     const MAX_INTERIOR_FRACTION: f64 = 0.15;
     if interior.len() as f64 > volume * MAX_INTERIOR_FRACTION {
+        fill_small_interior_pockets(grid, &interior);
         return;
     }
 
+    paint_interior_cells(grid, &interior);
+}
+
+/// Fill only small connected air pockets inside a mostly-hollow statue shell.
+fn fill_small_interior_pockets(grid: &mut VoxelGrid, interior: &[(u32, u32, u32)]) {
+    use std::collections::HashSet;
+    /// Larger than a multi-cell raster miss; smaller than a limb / torso cavity.
+    const MAX_POCKET: usize = 64;
+    let w = grid.width;
+    let h = grid.height;
+    let l = grid.length;
+    let mut pending: HashSet<(u32, u32, u32)> = interior.iter().copied().collect();
+    while let Some(&start) = pending.iter().next() {
+        let mut stack = vec![start];
+        let mut component = Vec::new();
+        pending.remove(&start);
+        while let Some((x, y, z)) = stack.pop() {
+            component.push((x, y, z));
+            for (nx, ny, nz) in six_neighbors(x, y, z) {
+                if nx >= w || ny >= h || nz >= l {
+                    continue;
+                }
+                if pending.remove(&(nx, ny, nz)) {
+                    stack.push((nx, ny, nz));
+                }
+            }
+        }
+        if component.len() <= MAX_POCKET {
+            paint_interior_cells(grid, &component);
+        }
+    }
+}
+
+fn paint_interior_cells(grid: &mut VoxelGrid, interior: &[(u32, u32, u32)]) {
+    let w = grid.width;
+    let h = grid.height;
+    let l = grid.length;
+    let mut remaining: Vec<(u32, u32, u32)> = interior
+        .iter()
+        .copied()
+        .filter(|&(x, y, z)| !grid.is_occupied(x, y, z))
+        .collect();
     loop {
         let mut painted = 0usize;
-        for &(x, y, z) in &interior {
+        for &(x, y, z) in &remaining {
             if grid.is_occupied(x, y, z) {
                 continue;
             }
@@ -1374,13 +1427,15 @@ fn fill_enclosed_interiors(grid: &mut VoxelGrid) {
                 break;
             }
             let mut source: Option<VoxelCell> = None;
-            for (nx, ny, nz) in neighbors(x, y, z) {
+            for (nx, ny, nz) in six_neighbors(x, y, z) {
                 if nx >= w || ny >= h || nz >= l {
                     continue;
                 }
                 if let Some(ncell) = grid.cell(nx, ny, nz) {
-                    source = Some(ncell.clone());
-                    break;
+                    if ncell.occupied {
+                        source = Some(ncell.clone());
+                        break;
+                    }
                 }
             }
             if let Some(cell) = source {
@@ -1394,33 +1449,120 @@ fn fill_enclosed_interiors(grid: &mut VoxelGrid) {
         if painted == 0 {
             break;
         }
-        interior.retain(|&(x, y, z)| !grid.is_occupied(x, y, z));
-        if interior.is_empty() {
+        remaining.retain(|&(x, y, z)| !grid.is_occupied(x, y, z));
+        if remaining.is_empty() {
             break;
         }
     }
 }
 
-/// Keep only surface voxels (6-neighbor exposed). Used after mesh or skin voxelization.
+/// Close 1-voxel holes in the painted surface (missed stamps on large faces).
+/// Does not flood open cavities — only axis-bridged gaps and tightly enclosed air.
+fn seal_surface_pinholes(grid: &mut VoxelGrid) {
+    let w = grid.width;
+    let h = grid.height;
+    let l = grid.length;
+    if w == 0 || h == 0 || l == 0 {
+        return;
+    }
+    for _ in 0..3 {
+        let Some((min, max)) = grid.occupied_bounds() else {
+            return;
+        };
+        let mut fills: Vec<(u32, u32, u32, VoxelCell)> = Vec::new();
+        for y in min[1]..=max[1] {
+            for z in min[2]..=max[2] {
+                for x in min[0]..=max[0] {
+                    if grid.is_occupied(x, y, z) {
+                        continue;
+                    }
+                    let nbrs = six_neighbors(x, y, z);
+                    let cell_at = |nx: u32, ny: u32, nz: u32| -> Option<&VoxelCell> {
+                        if nx >= w || ny >= h || nz >= l {
+                            return None;
+                        }
+                        grid.cell(nx, ny, nz).filter(|c| c.occupied)
+                    };
+                    let mut occupied_n = 0u32;
+                    let mut source: Option<VoxelCell> = None;
+                    let mut axis_gap = false;
+                    for &(a, b) in &[
+                        (nbrs[0], nbrs[1]),
+                        (nbrs[2], nbrs[3]),
+                        (nbrs[4], nbrs[5]),
+                    ] {
+                        let left = cell_at(a.0, a.1, a.2);
+                        let right = cell_at(b.0, b.1, b.2);
+                        if left.is_some() && right.is_some() {
+                            axis_gap = true;
+                        }
+                        if source.is_none() {
+                            source = left.or(right).cloned();
+                        }
+                    }
+                    for (nx, ny, nz) in nbrs {
+                        if let Some(cell) = cell_at(nx, ny, nz) {
+                            occupied_n += 1;
+                            if source.is_none() {
+                                source = Some(cell.clone());
+                            }
+                        }
+                    }
+                    // Axis bridge = classic 1-voxel wall hole. ≥4 face neighbours
+                    // catches diagonal misses without filling open silhouette notches.
+                    if !(axis_gap || occupied_n >= 4) {
+                        continue;
+                    }
+                    if let Some(cell) = source {
+                        fills.push((x, y, z, cell));
+                    }
+                }
+            }
+        }
+        if fills.is_empty() {
+            break;
+        }
+        for (x, y, z, cell) in fills {
+            if grid.occupied_count() as u64 >= MAX_OCCUPIED_VOXELS {
+                break;
+            }
+            grid.with_cell_mut(x, y, z, true, |dst| {
+                *dst = cell;
+                dst.occupied = true;
+            });
+        }
+    }
+}
+
+/// Keep only the exterior shell: voxels that touch outside air (reachable from the
+/// occupied AABB border / grid edge). Drops buried cells and walls that only face
+/// enclosed cavities. Mutates the convert grid export uses (not preview LOD).
 pub(crate) fn hollow_out(grid: &mut VoxelGrid) {
+    let Some((min, max)) = grid.occupied_bounds() else {
+        return;
+    };
+    let bw = (max[0] - min[0] + 1) as usize;
+    let bl = (max[2] - min[2] + 1) as usize;
+    let outside = mark_aabb_exterior_air(grid, min, max);
+
     let coords = grid.occupied_coords();
     let mut drop_list = Vec::new();
     for (x, y, z) in coords {
-        let neighbors = [
-            (x.wrapping_sub(1), y, z),
-            (x + 1, y, z),
-            (x, y.wrapping_sub(1), z),
-            (x, y + 1, z),
-            (x, y, z.wrapping_sub(1)),
-            (x, y, z + 1),
-        ];
-        let exposed = neighbors.iter().any(|&(nx, ny, nz)| {
-            nx >= grid.width
-                || ny >= grid.height
-                || nz >= grid.length
-                || !grid.is_occupied(nx, ny, nz)
+        let exterior_facing = six_neighbors(x, y, z).iter().any(|&(nx, ny, nz)| {
+            if nx >= grid.width || ny >= grid.height || nz >= grid.length {
+                return true;
+            }
+            if grid.is_occupied(nx, ny, nz) {
+                return false;
+            }
+            // Empty neighbour outside the occupied AABB is true exterior.
+            if nx < min[0] || ny < min[1] || nz < min[2] || nx > max[0] || ny > max[1] || nz > max[2]
+            {
+                return true;
+            }
+            outside[aabb_index(min, bw, bl, nx, ny, nz)]
         });
-        if !exposed {
+        if !exterior_facing {
             drop_list.push((x, y, z));
         }
     }
@@ -1429,6 +1571,269 @@ pub(crate) fn hollow_out(grid: &mut VoxelGrid) {
             *cell = empty_cell();
         });
     }
+}
+
+/// Keep voxels visible from exterior multi-view sampling (Fibonacci sphere cameras
+/// around the occupied AABB). Unlike axis-first-hit silhouette, overhang undersides
+/// stay when any outside viewpoint can see them. Stronger than [`hollow_out`] for
+/// pockets that no exterior camera can see. Mutates the convert/export grid.
+pub(crate) fn hollow_outer_multiview(grid: &mut VoxelGrid) {
+    let Some((min, max)) = grid.occupied_bounds() else {
+        return;
+    };
+    let bw = (max[0] - min[0] + 1) as usize;
+    let bh = (max[1] - min[1] + 1) as usize;
+    let bl = (max[2] - min[2] + 1) as usize;
+    let mut keep = vec![false; bw * bh * bl];
+
+    let cx = (min[0] + max[0]) as f32 * 0.5 + 0.5;
+    let cy = (min[1] + max[1]) as f32 * 0.5 + 0.5;
+    let cz = (min[2] + max[2]) as f32 * 0.5 + 0.5;
+    let hx = (max[0] - min[0]) as f32 * 0.5 + 1.5;
+    let hy = (max[1] - min[1]) as f32 * 0.5 + 1.5;
+    let hz = (max[2] - min[2]) as f32 * 0.5 + 1.5;
+    let radius = (hx * hx + hy * hy + hz * hz).sqrt() * 1.35;
+
+    let max_dim = bw.max(bh).max(bl);
+    // Scale with the statue — the old 96-ray cap undersampled large shells and
+    // punched holes through faces that a denser view grid would keep.
+    let view_count = (48 + max_dim / 2).clamp(64, 320);
+    let res = (max_dim + 8).clamp(40, 512);
+    let viewpoints = fibonacci_sphere_points(view_count, cx, cy, cz, radius);
+
+    for eye in viewpoints {
+        let forward = [
+            cx - eye[0],
+            cy - eye[1],
+            cz - eye[2],
+        ];
+        let fl = (forward[0] * forward[0] + forward[1] * forward[1] + forward[2] * forward[2])
+            .sqrt()
+            .max(1e-4);
+        let forward = [forward[0] / fl, forward[1] / fl, forward[2] / fl];
+        let (right, up) = camera_basis(forward);
+        // Cover the bounding sphere from this eye.
+        let half = (hx.max(hy).max(hz) / fl).atan().tan().max(0.35);
+        let step = (2.0 * half) / res as f32;
+        for iy in 0..res {
+            let v = -half + (iy as f32 + 0.5) * step;
+            for ix in 0..res {
+                let u = -half + (ix as f32 + 0.5) * step;
+                let dir = [
+                    forward[0] + right[0] * u + up[0] * v,
+                    forward[1] + right[1] * u + up[1] * v,
+                    forward[2] + right[2] * u + up[2] * v,
+                ];
+                let dl = (dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2])
+                    .sqrt()
+                    .max(1e-4);
+                let dir = [dir[0] / dl, dir[1] / dl, dir[2] / dl];
+                if let Some((x, y, z)) =
+                    cast_first_occupied(grid, eye[0], eye[1], eye[2], dir[0], dir[1], dir[2])
+                {
+                    if x >= min[0]
+                        && y >= min[1]
+                        && z >= min[2]
+                        && x <= max[0]
+                        && y <= max[1]
+                        && z <= max[2]
+                    {
+                        keep[aabb_index(min, bw, bl, x, y, z)] = true;
+                    }
+                }
+            }
+        }
+    }
+
+    let coords = grid.occupied_coords();
+    let mut drop_list = Vec::new();
+    for (x, y, z) in coords {
+        if x < min[0] || y < min[1] || z < min[2] || x > max[0] || y > max[1] || z > max[2] {
+            continue;
+        }
+        if !keep[aabb_index(min, bw, bl, x, y, z)] {
+            drop_list.push((x, y, z));
+        }
+    }
+    for (x, y, z) in drop_list {
+        grid.with_cell_mut(x, y, z, false, |cell| {
+            *cell = empty_cell();
+        });
+    }
+}
+
+fn fibonacci_sphere_points(count: usize, cx: f32, cy: f32, cz: f32, radius: f32) -> Vec<[f32; 3]> {
+    let n = count.max(8);
+    let mut out = Vec::with_capacity(n);
+    let golden = std::f32::consts::PI * (3.0 - 5.0_f32.sqrt());
+    for i in 0..n {
+        let y = 1.0 - (i as f32 / (n - 1).max(1) as f32) * 2.0;
+        let r = (1.0 - y * y).max(0.0).sqrt();
+        let theta = golden * i as f32;
+        out.push([
+            cx + radius * theta.cos() * r,
+            cy + radius * y,
+            cz + radius * theta.sin() * r,
+        ]);
+    }
+    out
+}
+
+fn camera_basis(forward: [f32; 3]) -> ([f32; 3], [f32; 3]) {
+    let world_up = if forward[1].abs() > 0.9 {
+        [0.0, 0.0, 1.0]
+    } else {
+        [0.0, 1.0, 0.0]
+    };
+    let right = [
+        forward[1] * world_up[2] - forward[2] * world_up[1],
+        forward[2] * world_up[0] - forward[0] * world_up[2],
+        forward[0] * world_up[1] - forward[1] * world_up[0],
+    ];
+    let rl = (right[0] * right[0] + right[1] * right[1] + right[2] * right[2])
+        .sqrt()
+        .max(1e-4);
+    let right = [right[0] / rl, right[1] / rl, right[2] / rl];
+    let up = [
+        right[1] * forward[2] - right[2] * forward[1],
+        right[2] * forward[0] - right[0] * forward[2],
+        right[0] * forward[1] - right[1] * forward[0],
+    ];
+    (right, up)
+}
+
+/// Amanatides & Woo style DDA: first occupied voxel along a ray, or None.
+fn cast_first_occupied(
+    grid: &VoxelGrid,
+    ox: f32,
+    oy: f32,
+    oz: f32,
+    dx: f32,
+    dy: f32,
+    dz: f32,
+) -> Option<(u32, u32, u32)> {
+    let w = grid.width as f32;
+    let h = grid.height as f32;
+    let l = grid.length as f32;
+    // Clip ray entry to the grid AABB [0,w) x [0,h) x [0,l).
+    let mut t0 = 0.0_f32;
+    let mut t1 = (w + h + l) * 4.0;
+    for (o, d, mn, mx) in [
+        (ox, dx, 0.0_f32, w),
+        (oy, dy, 0.0_f32, h),
+        (oz, dz, 0.0_f32, l),
+    ] {
+        if d.abs() < 1e-8 {
+            if o < mn || o >= mx {
+                return None;
+            }
+            continue;
+        }
+        let mut ta = (mn - o) / d;
+        let mut tb = (mx - o) / d;
+        if ta > tb {
+            std::mem::swap(&mut ta, &mut tb);
+        }
+        t0 = t0.max(ta);
+        t1 = t1.min(tb);
+        if t0 > t1 {
+            return None;
+        }
+    }
+    let mut t = t0 + 1e-4;
+    let mut x = (ox + dx * t).floor() as i32;
+    let mut y = (oy + dy * t).floor() as i32;
+    let mut z = (oz + dz * t).floor() as i32;
+    let step_x = if dx >= 0.0 { 1 } else { -1 };
+    let step_y = if dy >= 0.0 { 1 } else { -1 };
+    let step_z = if dz >= 0.0 { 1 } else { -1 };
+    let t_delta_x = if dx.abs() < 1e-8 {
+        f32::INFINITY
+    } else {
+        (1.0 / dx).abs()
+    };
+    let t_delta_y = if dy.abs() < 1e-8 {
+        f32::INFINITY
+    } else {
+        (1.0 / dy).abs()
+    };
+    let t_delta_z = if dz.abs() < 1e-8 {
+        f32::INFINITY
+    } else {
+        (1.0 / dz).abs()
+    };
+    let mut t_max_x = if dx.abs() < 1e-8 {
+        f32::INFINITY
+    } else {
+        let next = if dx >= 0.0 {
+            x as f32 + 1.0
+        } else {
+            x as f32
+        };
+        (next - ox) / dx
+    };
+    let mut t_max_y = if dy.abs() < 1e-8 {
+        f32::INFINITY
+    } else {
+        let next = if dy >= 0.0 {
+            y as f32 + 1.0
+        } else {
+            y as f32
+        };
+        (next - oy) / dy
+    };
+    let mut t_max_z = if dz.abs() < 1e-8 {
+        f32::INFINITY
+    } else {
+        let next = if dz >= 0.0 {
+            z as f32 + 1.0
+        } else {
+            z as f32
+        };
+        (next - oz) / dz
+    };
+
+    let max_steps = (grid.width + grid.height + grid.length) as usize * 3 + 8;
+    for _ in 0..max_steps {
+        if x < 0
+            || y < 0
+            || z < 0
+            || x >= grid.width as i32
+            || y >= grid.height as i32
+            || z >= grid.length as i32
+        {
+            return None;
+        }
+        let ux = x as u32;
+        let uy = y as u32;
+        let uz = z as u32;
+        if grid.is_occupied(ux, uy, uz) {
+            return Some((ux, uy, uz));
+        }
+        if t_max_x < t_max_y {
+            if t_max_x < t_max_z {
+                x += step_x;
+                t = t_max_x;
+                t_max_x += t_delta_x;
+            } else {
+                z += step_z;
+                t = t_max_z;
+                t_max_z += t_delta_z;
+            }
+        } else if t_max_y < t_max_z {
+            y += step_y;
+            t = t_max_y;
+            t_max_y += t_delta_y;
+        } else {
+            z += step_z;
+            t = t_max_z;
+            t_max_z += t_delta_z;
+        }
+        if t > t1 + 1e-3 {
+            return None;
+        }
+    }
+    None
 }
 
 fn lerp(a: [f32; 3], b: [f32; 3], t: f32) -> [f32; 3] {
@@ -2410,5 +2815,139 @@ mod tests {
             occupied * 4 < total,
             "hollow mesh path must not fill interior, occupied={occupied} total={total}"
         );
+    }
+
+    #[test]
+    fn seal_surface_pinholes_closes_one_voxel_wall_gap() {
+        let mut grid = VoxelGrid::empty(8, 8, 8);
+        // Flat wall on z=3 with a single missing cell.
+        for y in 1..=5 {
+            for x in 1..=5 {
+                if x == 3 && y == 3 {
+                    continue;
+                }
+                grid.put_rgb(x, y, 3, [80.0, 160.0, 200.0]);
+            }
+        }
+        assert!(!grid.is_occupied(3, 3, 3));
+        seal_surface_pinholes(&mut grid);
+        assert!(grid.is_occupied(3, 3, 3), "axis gap must be sealed");
+        // Open notch on the silhouette edge must stay empty.
+        assert!(!grid.is_occupied(0, 3, 3));
+    }
+
+    #[test]
+    fn hollow_out_strips_solid_cube_to_exterior_shell() {
+        let mut grid = VoxelGrid::empty(12, 12, 12);
+        for y in 2..10 {
+            for z in 2..10 {
+                for x in 2..10 {
+                    grid.put_rgb(x, y, z, [200.0, 40.0, 40.0]);
+                }
+            }
+        }
+        let before = grid.occupied_count();
+        hollow_out(&mut grid);
+        let after = grid.occupied_count();
+        assert!(after < before, "before={before} after={after}");
+        // 8×8×8 solid → shell surface ≈ 8³ − 6³ = 296
+        assert!(
+            (280..=320).contains(&after),
+            "expected ~296 exterior cells, got {after}"
+        );
+        assert!(grid.is_occupied(2, 5, 5), "outer face must remain");
+        assert!(!grid.is_occupied(5, 5, 5), "buried core must be cleared");
+    }
+
+    #[test]
+    fn hollow_out_drops_cavity_only_inner_shell() {
+        let mut grid = VoxelGrid::empty(16, 16, 16);
+        // Outer sealed shell at [1..=10]
+        for y in 1..=10 {
+            for z in 1..=10 {
+                for x in 1..=10 {
+                    let on_face = x == 1 || x == 10 || y == 1 || y == 10 || z == 1 || z == 10;
+                    if on_face {
+                        grid.put_rgb(x, y, z, [40.0, 180.0, 80.0]);
+                    }
+                }
+            }
+        }
+        // Floating inner solid only exposed to the sealed cavity
+        for y in 4..=6 {
+            for z in 4..=6 {
+                for x in 4..=6 {
+                    grid.put_rgb(x, y, z, [220.0, 180.0, 40.0]);
+                }
+            }
+        }
+        let before = grid.occupied_count();
+        hollow_out(&mut grid);
+        let after = grid.occupied_count();
+        assert!(after < before, "before={before} after={after}");
+        assert!(grid.is_occupied(1, 5, 5), "outer shell kept");
+        assert!(
+            !grid.is_occupied(5, 5, 5),
+            "cavity-only interior must be removed"
+        );
+        assert!(
+            !grid.is_occupied(4, 5, 5),
+            "inner blob face into cavity must be removed"
+        );
+    }
+
+    #[test]
+    fn hollow_outer_multiview_keeps_solid_outer_faces_only() {
+        let mut grid = VoxelGrid::empty(12, 12, 12);
+        for y in 2..10 {
+            for z in 2..10 {
+                for x in 2..10 {
+                    grid.put_rgb(x, y, z, [200.0, 40.0, 40.0]);
+                }
+            }
+        }
+        let before = grid.occupied_count();
+        hollow_outer_multiview(&mut grid);
+        let after = grid.occupied_count();
+        assert!(after < before, "before={before} after={after}");
+        assert!(
+            after * 2 < before,
+            "should strip most of the solid interior, before={before} after={after}"
+        );
+        assert!(grid.is_occupied(2, 5, 5), "outer face kept");
+        assert!(!grid.is_occupied(5, 5, 5), "buried core dropped");
+    }
+
+    #[test]
+    fn hollow_outer_multiview_keeps_overhang_underside() {
+        let mut grid = VoxelGrid::empty(14, 12, 14);
+        // Floor
+        for x in 2..=11 {
+            for z in 2..=11 {
+                grid.put_rgb(x, 1, z, [90.0, 90.0, 90.0]);
+            }
+        }
+        // Corner posts
+        for y in 2..=5 {
+            for &(x, z) in &[(2, 2), (2, 11), (11, 2), (11, 11)] {
+                grid.put_rgb(x, y, z, [90.0, 90.0, 90.0]);
+            }
+        }
+        // Overhang roof
+        for x in 2..=11 {
+            for z in 2..=11 {
+                grid.put_rgb(x, 5, z, [90.0, 90.0, 90.0]);
+            }
+        }
+        // Block under the overhang — open to the sides, not enclosed.
+        grid.put_rgb(6, 3, 6, [220.0, 40.0, 40.0]);
+
+        hollow_outer_multiview(&mut grid);
+        assert!(
+            grid.is_occupied(6, 3, 6),
+            "multi-view must keep overhang-underside blocks visible from the side"
+        );
+        assert!(grid.is_occupied(2, 1, 2), "floor kept");
+        assert!(grid.is_occupied(6, 5, 6), "overhang kept");
     }
 }

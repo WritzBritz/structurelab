@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, startTransition } from 'react'
 import { open as openFileDialog } from '@tauri-apps/plugin-dialog'
-import { bytesToBase64, bytesToBase64Async, cleanupStagedPaths, convertScene, loadModelCubes, loadPalette, logDebug, localFileSize, nextConvertGeneration, readLocalFileBytes, readLocalFileChunk, saveExport, stageBytesToTemp } from '../../api'
+import { bytesToBase64, bytesToBase64Async, cleanupStagedPaths, convertScene, datapackPlaceCommand, datapackStopCommand, loadModelCubes, loadPalette, logDebug, localFileSize, nextConvertGeneration, readLocalFileBytes, readLocalFileChunk, sanitizeDatapackName, saveExport, stageBytesToTemp } from '../../api'
 import {
   applyStatueMaterialPreset,
   baseBlockId,
@@ -29,13 +29,15 @@ import { LightfallToggle } from '../../components/LightfallPreference'
 import { ThemeToggle } from '../../theme/AppTheme'
 import { CapeField, CapePickerDialog, type CapeSelection } from './CapePickerDialog'
 import { officialCapeById } from './capeModel'
+import { DatapackBuildDialog } from './DatapackBuildDialog'
+import { DEFAULT_DATAPACK_TARGET_SECONDS } from './datapackOrder'
 import { MinecraftAddDialog } from './MinecraftAddDialog'
 import { ensureCatalogEntityTextures } from './minecraftCatalog'
 import { catalogKeepConvertOverlays } from './entityCatalogFixes'
 import MinecraftVersionSelect from '../../components/MinecraftVersionSelect'
 import { MissingTextureWarnings } from '../../components/MissingTextureWarnings'
 import { CopyableNotice, TopbarStatus } from '../../components/AppErrorHost'
-import { statusFromError } from '../../appError'
+import { statusFromError, copyText } from '../../appError'
 import {
   AppDialog,
   AxisSlider,
@@ -67,6 +69,7 @@ import {
   resolveModelUv,
   skinAtlasSizeMultiplier,
   type ExportFormat,
+  type DatapackPattern,
   type GravitySupportMode,
   type ModelAppearanceCube,
   type PaletteFile,
@@ -195,7 +198,7 @@ import { resolveTextureSiblings, textureNamesToProbe, isRasterTextureName, ensur
 import { exportNamesMatch, findEntryByExportName, foldExportName, repairMojibake } from './exportText'
 import { detectSlimSkinBytes, inspectPlayerSkin, skinHdNote } from './skinModel'
 import { companionDropShouldAttachToSelection, type SourceDropIntent } from './sourceDropIntent'
-import { useModelsHistory, snapshotNeedsProgress, type ModelsHistorySnapshot } from './useModelsHistory'
+import { useModelsHistory, snapshotClearsBuild, snapshotNeedsProgress, type ModelsHistorySnapshot } from './useModelsHistory'
 import './voxel-viewer.css'
 import '../../workspace.css'
 
@@ -335,7 +338,8 @@ export default function ModelsApp({ onBack }: { onBack: () => void }) {
   const [palette, setPalette] = useState<PaletteFile | null>(null)
   const [parts, setParts] = useState<ScenePartLocal[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
-  const [selectedLimb, setSelectedLimb] = useState<string>('right_arm')
+  // Root = scene placement; limb joints are selected explicitly for posing.
+  const [selectedLimb, setSelectedLimb] = useState<string>('root')
   const [step, setStep] = useState<WorkflowStep>('sources')
   const [shared, setShared] = useState<SharedOptions>({
     disabledColorIds: defaultModelOptions.disabledColorIds,
@@ -357,6 +361,13 @@ export default function ModelsApp({ onBack }: { onBack: () => void }) {
   const [textureCacheEpoch, setTextureCacheEpoch] = useState(() => getTextureCacheEpoch())
   const [status, setStatus] = useState('Add an OBJ or player skin to begin')
   const [busy, setBusy] = useState(false)
+  const [datapackName, setDatapackName] = useState('build')
+  const [datapackPattern, setDatapackPattern] = useState<DatapackPattern>('instant')
+  const [datapackBlocksPerTick, setDatapackBlocksPerTick] = useState(16)
+  const [datapackDelayTicks, setDatapackDelayTicks] = useState(0)
+  const [datapackTargetSeconds, setDatapackTargetSeconds] = useState(DEFAULT_DATAPACK_TARGET_SECONDS)
+  const [datapackPiecesPerTick, setDatapackPiecesPerTick] = useState(8)
+  const [datapackDialogOpen, setDatapackDialogOpen] = useState(false)
   const busyRef = useRef(false)
   busyRef.current = busy
   const [dragging, setDragging] = useState(false)
@@ -470,6 +481,12 @@ export default function ModelsApp({ onBack }: { onBack: () => void }) {
     placementDirty: false,
     step: 'sources',
     showSourcePreview: true,
+    datapackName: 'build',
+    datapackPattern: 'instant',
+    datapackBlocksPerTick: 16,
+    datapackDelayTicks: 0,
+    datapackTargetSeconds: DEFAULT_DATAPACK_TARGET_SECONDS,
+    datapackPiecesPerTick: 8,
   })
   historySnapshotRef.current = {
     parts,
@@ -482,9 +499,17 @@ export default function ModelsApp({ onBack }: { onBack: () => void }) {
     placementDirty,
     step,
     showSourcePreview,
+    datapackName,
+    datapackPattern,
+    datapackBlocksPerTick,
+    datapackDelayTicks,
+    datapackTargetSeconds,
+    datapackPiecesPerTick,
   }
 
   const applyHistorySnapshot = useCallback((snapshot: ModelsHistorySnapshot) => {
+    const live = historySnapshotRef.current
+    const clearBuild = snapshotClearsBuild(live, snapshot)
     startTransition(() => {
       setParts(snapshot.parts)
       setSelectedId(snapshot.selectedId)
@@ -507,7 +532,13 @@ export default function ModelsApp({ onBack }: { onBack: () => void }) {
       setPlacementDirty(snapshot.placementDirty)
       setStep(snapshot.step)
       setShowSourcePreview(snapshot.showSourcePreview)
-      setResult(null)
+      setDatapackName(snapshot.datapackName ?? 'build')
+      setDatapackPattern(snapshot.datapackPattern ?? 'instant')
+      setDatapackBlocksPerTick(snapshot.datapackBlocksPerTick ?? 16)
+      setDatapackDelayTicks(snapshot.datapackDelayTicks ?? 0)
+      setDatapackTargetSeconds(snapshot.datapackTargetSeconds ?? DEFAULT_DATAPACK_TARGET_SECONDS)
+      setDatapackPiecesPerTick(snapshot.datapackPiecesPerTick ?? 8)
+      if (clearBuild) setResult(null)
     })
   }, [])
 
@@ -747,17 +778,21 @@ export default function ModelsApp({ onBack }: { onBack: () => void }) {
   )
   const onPreviewProgress = useCallback((ratio: number, label: string) => {
     setStatus(compactLabel(label, 72))
-    // Only the viewer’s first drawn frame (or a hard fail / empty wait) closes
+    // Only the viewer’s first drawn frame (or a hard fail / empty wait / abort) closes
     // the overlay — worker “ready” labels must not dismiss it early.
     const finished =
       label === 'Preview ready'
       || label === 'Preview failed'
+      || label === 'Preview aborted'
       || label === 'Waiting'
     if (finished) {
       awaitPreviewOverlayRef.current = false
       sourcePreviewOverlayRef.current = false
       progressFloorRef.current = 0
-      setLoadProgress(null)
+      // Convert/export keeps its own busy overlay; don't clear mid-convert.
+      if (!busyRef.current) {
+        setLoadProgress(null)
+      }
       return
     }
     awaitPreviewOverlayRef.current = true
@@ -808,7 +843,8 @@ export default function ModelsApp({ onBack }: { onBack: () => void }) {
   }
 
   useEffect(() => {
-    if (!sourcePreviewOverlayRef.current) return
+    // Upload/remount often sets awaitPreviewOverlayRef without sourcePreviewOverlayRef.
+    if (!sourcePreviewOverlayRef.current && !awaitPreviewOverlayRef.current) return
     const meshViewerMounted =
       parts.length > 0
       && !(
@@ -823,6 +859,18 @@ export default function ModelsApp({ onBack }: { onBack: () => void }) {
     progressFloorRef.current = 0
     setLoadProgress(null)
   }, [parts.length, result, showSourcePreview, step])
+
+  useEffect(() => {
+    return () => {
+      awaitPreviewOverlayRef.current = false
+      sourcePreviewOverlayRef.current = false
+      progressFloorRef.current = 0
+      // Leaving Models mid-convert is rare; only clear preview overlay state.
+      if (!busyRef.current) {
+        setLoadProgress(null)
+      }
+    }
+  }, [])
 
   useEffect(() => {
     try {
@@ -1331,19 +1379,19 @@ export default function ModelsApp({ onBack }: { onBack: () => void }) {
               > 0.05
             )
           })
-          let slim =
-            deps.slimArms
-            || pose.slimArms
+          // Prefer PNG pixel detection over mimodel “alex/steve” placeholders —
+          // the texture file is the source of truth for arm width.
+          let slim = deps.slimArms || pose.slimArms
           let hdNote = ''
           let atlasScale = 1
           try {
             const inspected = await inspectPlayerSkin(skinBytes, skinName)
-            slim = slim || inspected.slim
+            slim = inspected.slim
             atlasScale = inspected.atlas.scale
             const note = skinHdNote(inspected.atlas)
             if (note) hdNote = ` · ${note}`
           } catch {
-            slim = slim || (await detectSlimSkinBytes(skinBytes, skinName))
+            slim = await detectSlimSkinBytes(skinBytes, skinName)
           }
           nextParts.push(
             createSkinPart(file.name, skinBytes, {
@@ -1788,7 +1836,9 @@ export default function ModelsApp({ onBack }: { onBack: () => void }) {
             createSkinPart(file.name, bytes, {
               slimArms: slim,
               skinLimbs: slim ? 'slim' : 'classic',
-              sourceLabel: hd ? `${hd} HD skin` : null,
+              sourceLabel: hd
+                ? `${hd} HD skin · ${slim ? 'slim' : 'classic'} arms`
+                : `${slim ? 'Slim' : 'Classic'} arms (auto)`,
               atlasScale: atlas.scale,
             }),
           )
@@ -1980,7 +2030,9 @@ export default function ModelsApp({ onBack }: { onBack: () => void }) {
         )
         setResult(null)
         setStatus(
-          `Attached skin ${png.name}${atlasNote ? ` (${atlasNote})` : ''} — continue to Build when ready`,
+          `Attached skin ${png.name} · ${slim ? 'slim' : 'classic'} arms (auto)${
+            atlasNote ? ` · ${atlasNote}` : ''
+          } — continue to Build when ready`,
         )
         return
       }
@@ -2550,8 +2602,12 @@ export default function ModelsApp({ onBack }: { onBack: () => void }) {
           ? 'part-edit'
           : undefined
     recordBeforeChange(coalesce)
+    const nextValue =
+      key === 'positionX' || key === 'positionY' || key === 'positionZ'
+        ? Math.round(Number(value)) || 0
+        : value
     setParts((current) =>
-      current.map((part) => (part.id === selected.id ? { ...part, [key]: value } : part)),
+      current.map((part) => (part.id === selected.id ? { ...part, [key]: nextValue } : part)),
     )
     const placementKey =
       key === 'positionX'
@@ -3618,17 +3674,18 @@ export default function ModelsApp({ onBack }: { onBack: () => void }) {
           mtlPath,
           texturesBase64,
           texturesPaths,
-          positionX: part.positionX,
-          positionY: part.positionY,
-          positionZ: part.positionZ,
+          positionX: Math.round(Number(part.positionX)) || 0,
+          positionY: Math.round(Number(part.positionY)) || 0,
+          positionZ: Math.round(Number(part.positionZ)) || 0,
           rotationX: part.rotationX ?? 0,
           rotationY: part.rotationY ?? 0,
           rotationZ: part.rotationZ ?? 0,
-          width: convertWidth,
-          height: convertHeight,
-          length: convertLength,
+          width: Math.max(1, Math.round(Number(convertWidth)) || 1),
+          height: Math.max(1, Math.round(Number(convertHeight)) || 1),
+          length: Math.max(1, Math.round(Number(convertLength)) || 1),
           fit: convertFit,
           hollow: part.hollow,
+          outerSilhouette: part.outerSilhouette === true,
           cutout: isMcEntity,
           uv: resolveModelUv(part.uv),
           slimArms: part.slimArms,
@@ -3705,7 +3762,7 @@ export default function ModelsApp({ onBack }: { onBack: () => void }) {
       setStep((current) => (current === 'export' ? 'export' : 'build'))
       setStatus(
         next.voxels.length < next.occupiedVoxels
-          ? `Voxelized · ${next.occupiedVoxels.toLocaleString()} blocks (preview shows the full shape, sampled)`
+          ? `Voxelized · ${next.occupiedVoxels.toLocaleString()} blocks (preview uses larger cubes so huge builds stay solid — export is full detail)`
           : `Voxelized · ${next.occupiedVoxels.toLocaleString()} blocks`,
       )
       return true
@@ -3763,6 +3820,57 @@ export default function ModelsApp({ onBack }: { onBack: () => void }) {
     })
   }
 
+  async function exportDatapackAndCopyPlace() {
+    if (placementDirty) {
+      setStatus('Updating placement before export…')
+      const ok = await runVoxelize()
+      if (!ok) return
+    }
+    const id = sanitizeDatapackName(datapackName)
+    const placeCmd = datapackPlaceCommand(id)
+    const stopCmd = datapackStopCommand(id)
+    const animated = datapackPattern !== 'instant'
+    try {
+      setBusy(true)
+      setLoadProgress({ ratio: 0.05, label: 'Preparing datapack…' })
+      const saved = await saveExport('commandDatapack', {
+        minecraftVersion: result?.build.minecraftVersion,
+        dataVersion: result?.build.dataVersion,
+        datapackName: id,
+        datapackPattern,
+        datapackBlocksPerTick:
+          datapackPattern === 'optimal' ? datapackPiecesPerTick : datapackBlocksPerTick,
+        datapackDelayTicks,
+        onStart: () => setLoadProgress({ ratio: 0.1, label: 'Exporting datapack…' }),
+        onProgress: (ratio, label) => {
+          setLoadProgress({ ratio, label })
+          setStatus(label)
+        },
+      })
+      if (!saved) {
+        setStatus('Export cancelled')
+        return
+      }
+      const ok = await copyText(placeCmd)
+      setStatus(
+        ok
+          ? animated
+            ? `Datapack “${id}” saved. Copied “${placeCmd}” — extract into datapacks, /reload, stand at the corner, paste to start. Stop with ${stopCmd}.`
+            : `Datapack “${id}” saved. Copied “${placeCmd}” — extract into the world’s datapacks folder, /reload, stand at the build corner, then paste that command.`
+          : animated
+            ? `Datapack “${id}” saved. After /reload, run: ${placeCmd} (stop: ${stopCmd})`
+            : `Datapack “${id}” saved. After /reload, run: ${placeCmd}`,
+      )
+    } catch (error) {
+      setStatus(
+        statusFromError('Datapack export failed', error, { operation: 'export place datapack' }),
+      )
+    } finally {
+      setBusy(false)
+      setLoadProgress(null)
+    }
+  }
+
   const selectedPartIndex = selected
     ? parts.findIndex((part) => part.id === selected.id)
     : null
@@ -3775,9 +3883,43 @@ export default function ModelsApp({ onBack }: { onBack: () => void }) {
     return hit?.rgb ?? [128, 128, 128]
   }
 
-  function openCubeReplace(sourceState: string) {
+  /** Map a placed (or raw) block back to the appearance-cube key used in blockSubstitutions. */
+  function resolveCubeReplaceSource(placedOrSource: string): string {
+    const placedId = cubeId(placedOrSource)
+    const asMinecraft = placedOrSource.startsWith('minecraft:')
+      ? placedOrSource
+      : `minecraft:${placedId}`
+
+    const lookup = (key: string) =>
+      shared.blockSubstitutions[key]
+      ?? shared.blockSubstitutions[cubeId(key)]
+      ?? shared.blockSubstitutions[`minecraft:${cubeId(key)}`]
+
+    // Already a substitution source — keep the canonical cube.block when possible.
+    if (lookup(placedOrSource) || lookup(placedId) || lookup(asMinecraft)) {
+      const cube = modelCubes.find((entry) => cubeId(entry.block) === placedId)
+      return cube?.block ?? asMinecraft
+    }
+
+    // Reverse: which appearance cube currently places as this block?
+    for (const [from, to] of Object.entries(shared.blockSubstitutions)) {
+      if (cubeId(to) !== placedId) continue
+      const cube = modelCubes.find((entry) => cubeId(entry.block) === cubeId(from))
+      if (cube) return cube.block
+      return from.startsWith('minecraft:') ? from : `minecraft:${cubeId(from)}`
+    }
+
+    const cube = modelCubes.find((entry) => cubeId(entry.block) === placedId)
+    return cube?.block ?? asMinecraft
+  }
+
+  function openCubeReplace(placedOrSource: string) {
+    const sourceState = resolveCubeReplaceSource(placedOrSource)
     const placed = shared.blockSubstitutions[sourceState]
       ?? shared.blockSubstitutions[cubeId(sourceState)]
+      ?? shared.blockSubstitutions[
+          sourceState.startsWith('minecraft:') ? sourceState : `minecraft:${cubeId(sourceState)}`
+        ]
       ?? sourceState
     setReplaceTarget({
       selectedState: placed,
@@ -3785,7 +3927,11 @@ export default function ModelsApp({ onBack }: { onBack: () => void }) {
       enabled: !cubeIsDisabled(sourceState, shared.disabledBlocks),
       rgb: cubeRgb(sourceState),
       replaced: Boolean(
-        shared.blockSubstitutions[sourceState] || shared.blockSubstitutions[cubeId(sourceState)],
+        shared.blockSubstitutions[sourceState]
+        || shared.blockSubstitutions[cubeId(sourceState)]
+        || shared.blockSubstitutions[
+            sourceState.startsWith('minecraft:') ? sourceState : `minecraft:${cubeId(sourceState)}`
+          ],
       ),
     })
   }
@@ -3805,11 +3951,17 @@ export default function ModelsApp({ onBack }: { onBack: () => void }) {
   function replaceCube(fromState: string, toState: string) {
     setActivePreset('custom')
     recordBeforeChange('materials')
-    const from = fromState.startsWith('minecraft:') ? fromState : `minecraft:${cubeId(fromState)}`
+    const source = resolveCubeReplaceSource(fromState)
+    const fromId = cubeId(source)
+    const from = source.startsWith('minecraft:') ? source : `minecraft:${fromId}`
+    const to = toState.startsWith('minecraft:') ? toState : `minecraft:${cubeId(toState)}`
     setShared((current) => {
       const next = { ...current.blockSubstitutions }
-      if (cubeId(from) === cubeId(toState)) delete next[from]
-      else next[from] = toState.startsWith('minecraft:') ? toState : `minecraft:${cubeId(toState)}`
+      // Drop alias keys so the map stays single-keyed per appearance cube.
+      for (const key of Object.keys(next)) {
+        if (cubeId(key) === fromId) delete next[key]
+      }
+      if (fromId !== cubeId(to)) next[from] = to
       return { ...current, blockSubstitutions: next }
     })
     requestMaterialReconvert()
@@ -3836,9 +3988,11 @@ export default function ModelsApp({ onBack }: { onBack: () => void }) {
     [palette],
   )
   const cubeRows = useMemo(() => {
+    // Attribute placed counts to the appearance-cube source (not the substituted block).
     const counts = new Map<string, number>()
     for (const material of result?.build.materials ?? []) {
-      counts.set(cubeId(material.block), material.count)
+      const sourceId = cubeId(resolveCubeReplaceSource(material.block))
+      counts.set(sourceId, (counts.get(sourceId) ?? 0) + material.count)
     }
     const query = paletteSearch.trim().toLowerCase()
     return modelCubes
@@ -3846,8 +4000,9 @@ export default function ModelsApp({ onBack }: { onBack: () => void }) {
         const id = cubeId(cube.block)
         const placed = shared.blockSubstitutions[cube.block]
           ?? shared.blockSubstitutions[id]
+          ?? shared.blockSubstitutions[`minecraft:${id}`]
           ?? cube.block
-        const usedCount = counts.get(id) ?? counts.get(cubeId(placed)) ?? 0
+        const usedCount = counts.get(id) ?? 0
         const category = materialCategory(cube.block)
         const haystack = `${friendlyBlockName(cube.block)} ${cube.block} ${materialCategoryLabel(category)}`.toLowerCase()
         return {
@@ -3890,7 +4045,6 @@ export default function ModelsApp({ onBack }: { onBack: () => void }) {
   /** Blocks actually placed in the last convert — ordered by count, then name. */
   const usedBlocks = useMemo(() => {
     if (!result) return []
-    const known = new Set(modelCubes.map((cube) => cubeId(cube.block)))
     return result.build.materials
       .slice()
       .sort((a, b) => {
@@ -3898,18 +4052,21 @@ export default function ModelsApp({ onBack }: { onBack: () => void }) {
         return friendlyBlockName(a.block).localeCompare(friendlyBlockName(b.block))
       })
       .map((material) => {
-        const id = cubeId(material.block)
-        const cube = modelCubes.find((entry) => cubeId(entry.block) === id)
-        const isSupport = !cube && baseBlockId(material.block) === baseBlockId(shared.supportBlock)
+        const sourceState = resolveCubeReplaceSource(material.block)
+        const sourceId = cubeId(sourceState)
+        const cube = modelCubes.find((entry) => cubeId(entry.block) === sourceId)
+        const isSupport =
+          !cube && baseBlockId(material.block) === baseBlockId(shared.supportBlock)
         return {
           ...material,
+          sourceState,
           rgb: cube?.rgb,
-          editable: known.has(id),
+          editable: Boolean(cube),
           isSupport,
           category: materialCategoryLabel(materialCategory(material.block)),
         }
       })
-  }, [result, modelCubes, shared.supportBlock])
+  }, [result, modelCubes, shared.supportBlock, shared.blockSubstitutions])
 
   const visibleUsedBlocks = useMemo(() => {
     const query = materialSearch.trim().toLowerCase()
@@ -3979,7 +4136,7 @@ export default function ModelsApp({ onBack }: { onBack: () => void }) {
                 }
                 onClick={() => {
                   if (!row.editable) return
-                  openCubeReplace(row.block)
+                  openCubeReplace(row.sourceState)
                 }}
               >
                 <BlockIcon block={row.block} color={row.rgb} />
@@ -4535,7 +4692,7 @@ export default function ModelsApp({ onBack }: { onBack: () => void }) {
 
               <div className="size-preset-heading object-settings-heading">
                 <strong>Settings · {selected.name}</strong>
-                <span>Size, hollow, and placement for this object only</span>
+                <span>Size, hollow, silhouette, and placement for this object only</span>
               </div>
 
               {selected.kind === 'obj' ? (
@@ -4784,6 +4941,18 @@ export default function ModelsApp({ onBack }: { onBack: () => void }) {
               >
                 Hollow shell only
               </CheckRow>
+              <small className="field-hint">
+                Applied to the converted model and exports — keeps the exterior shell, drops buried blocks and walls that only face enclosed cavities.
+              </small>
+              <CheckRow
+                checked={selected.outerSilhouette === true}
+                onChange={(checked) => updateSelected('outerSilhouette', checked)}
+              >
+                Outer visibility cull
+              </CheckRow>
+              <small className="field-hint">
+                Multi-view cameras around the model keep anything visible from outside (overhangs stay). Drops pockets no exterior view can see. Best with Hollow.
+              </small>
 
               {sceneObjects.length > 1 && (
                 <SceneObjectFilter
@@ -5178,6 +5347,10 @@ export default function ModelsApp({ onBack }: { onBack: () => void }) {
                 </span>
                 <Text size="4">›</Text>
               </Button>
+              <small className="field-hint">
+                Living coral stays off by default (dies without water — datapack/Litematica cannot
+                prevent that). Leaves export as persistent so they do not decay after paste.
+              </small>
               {result && usedBlocks.length > 0 && (
                 <>
                   <div className="material-heading">
@@ -5275,8 +5448,19 @@ export default function ModelsApp({ onBack }: { onBack: () => void }) {
                   {result.build.dataVersion != null ? ` · data ${result.build.dataVersion}` : ''}
                 </p>
               ) : null}
+              <div className="size-preset-heading">
+                <strong>Place datapack</strong>
+                <span>Instant or animated placement — customize in a dedicated panel</span>
+              </div>
+              <ExportButton
+                title="Place datapack…"
+                detail={`.zip · ${datapackPlaceCommand(datapackName)}`}
+                primary
+                disabled={!result || busy}
+                onClick={() => setDatapackDialogOpen(true)}
+              />
               {([
-                ['all', 'All formats bundle', '.zip · recommended', true],
+                ['all', 'All formats bundle', '.zip · schematics', false],
                 ['vanillaNbt', 'Vanilla structure', '.nbt', false],
                 ['vanillaSplit', 'Vanilla structure pieces', '.zip · Structure Block safe', false],
                 [
@@ -5296,6 +5480,12 @@ export default function ModelsApp({ onBack }: { onBack: () => void }) {
                   onClick={() => void exportWithPlacement(format)}
                 />
               ))}
+              <div className="field-hint">
+                <p>
+                  <strong>Place datapack:</strong> opens a panel for Instant / Optimal paste or
+                  animated patterns, with a live preview, then export zip and copy the start command.
+                </p>
+              </div>
             </>
           )}
         </aside>
@@ -5449,9 +5639,9 @@ export default function ModelsApp({ onBack }: { onBack: () => void }) {
                         part.id === selected.id
                           ? {
                               ...part,
-                              positionX: position[0],
-                              positionY: position[1],
-                              positionZ: position[2],
+                              positionX: Math.round(position[0]),
+                              positionY: Math.round(position[1]),
+                              positionZ: Math.round(position[2]),
                               rotationX: rotation[0],
                               rotationY: rotation[1],
                               rotationZ: rotation[2],
@@ -5609,6 +5799,47 @@ export default function ModelsApp({ onBack }: { onBack: () => void }) {
           )}
         </div>
       </AppDialog>
+
+      <DatapackBuildDialog
+        open={datapackDialogOpen && Boolean(result)}
+        onOpenChange={setDatapackDialogOpen}
+        voxels={result?.voxels ?? []}
+        size={result?.size ?? [1, 1, 1]}
+        blockCount={Math.max(totalBlockCount, result?.occupiedVoxels ?? 0)}
+        busy={busy}
+        datapackName={datapackName}
+        onDatapackNameChange={(name) => {
+          recordBeforeChange('datapack')
+          setDatapackName(name)
+        }}
+        onDatapackNameEditEnd={endCoalesce}
+        pattern={datapackPattern}
+        onPatternChange={(next) => {
+          recordBeforeChange('datapack')
+          setDatapackPattern(next)
+          endCoalesce()
+        }}
+        targetSeconds={datapackTargetSeconds}
+        onTargetSecondsChange={(value) => {
+          recordBeforeChange('datapack')
+          setDatapackTargetSeconds(value)
+        }}
+        onTargetSecondsEditEnd={endCoalesce}
+        blocksPerTick={datapackBlocksPerTick}
+        onBlocksPerTickChange={(value) => {
+          setDatapackBlocksPerTick(value)
+        }}
+        delayTicks={datapackDelayTicks}
+        onDelayTicksChange={(value) => {
+          recordBeforeChange('datapack')
+          setDatapackDelayTicks(value)
+        }}
+        onDelayTicksEditEnd={endCoalesce}
+        onPiecesPerTickChange={setDatapackPiecesPerTick}
+        onExport={() => {
+          void exportDatapackAndCopyPlace()
+        }}
+      />
 
       {replaceTarget && palette && (
         <BlockReplaceDialog

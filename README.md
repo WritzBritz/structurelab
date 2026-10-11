@@ -23,7 +23,7 @@ Multi-map Litematica exports can optionally **split each 128×128 map into its o
 ## Tools
 
 - **Maps** — turn images into **map art** (Minecraft map-item colours, multi-map mosaics, floor only, flat or staircase) or **pixel art** (in-world cubes, one block deep, floor or wall). Convert and export show real progress; large mosaics keep the preview responsive (staged colour preview, deferred 3D voxels).
-- **Models** — import meshes, skins, and the Minecraft entity catalog; pose / voxelize to a block grid; export with the same structure formats
+- **Models** — import meshes, skins, and the Minecraft entity catalog; pose / voxelize to a block grid; preview datapack placement; export with the same structure formats
 
 ## Minecraft versions
 
@@ -127,11 +127,13 @@ Import any of the formats above, pose parts if you want, set width / height / le
 - **Blockbench `.bbmodel`** — cube projects become OBJ; Minecraft skin editor projects become a skin statue (embed the PNG or drop it with the file).
 - **Mine-imator** — `.miobject` mesh plus `.mimodel` pose / parts.
 - **Maya (best-effort):** FOR4 (≤2013) and FOR8 (2014+) binary plus ASCII; baked `MESH` polygon plugs; Autodesk `MTransformationMatrix` DAG locals (`t/r/s/jo/rp/rpt/sp/ro`, bindPose `bps`, FK→bind twin); orphaned-pivot restore when keep-transform cancels world≈I; shadingEngine materials via `CWFL`/`CONN`; UV face-vertex maps when present. Not a full Maya DG / skinCluster / constraint evaluator — props with cancelled locals keep authored mesh scale (freeze / re-export in Maya if oversized). Prefer OBJ/glTF from Maya for complex animated skins.
-- **Skins** — 64×64 (and HD multiples) player PNGs, slim arms, optional 3D second layer, cape PNG, and Mine-imator-style limb pose.
+- **Skins** — 64×64 (and HD multiples) player PNGs, slim arms (auto-detect from the texture), optional 3D second layer, official / custom cape PNGs, and Mine-imator-style limb pose. Official cape sheets ship under `entity-textures/cape/` with the installer (same pack sync as other entity textures).
 
 ### Matching & convert
 
-Default block pack is **Everything** — every honest 1×1×1 building cube in that Minecraft version (including full copper weathering stages). **Common** skips noisy decorative cubes. Wool / concrete / terracotta / stone / solid presets restrict further. Statues do not place fluids, falling sand, flowers, fire, or furniture-like blocks (brewing stands, lightning rods, and similar).
+Default block pack is **Everything** — every honest 1×1×1 building cube in that Minecraft version (including full copper weathering stages). **Common** skips noisy decorative cubes and rare ores. Wool / concrete / terracotta / stone / solid presets restrict further. Statues do not place fluids, falling sand, flowers, fire, or furniture-like blocks (brewing stands, lightning rods, and similar).
+
+Large hollow shells seal 1-voxel raster gaps without flooding statue-scale cavities. After convert you can preview **datapack place** order in 2D (default) or 3D before export.
 
 Default colour matching is **StructureLab smooth** (Oklab nearest cube, then a two-cube mix when that average is closer; 3D ordered grain; eyes stay a single cube). **Perceptual mix** is available for large statues. Hue-aware Lab is better for small / detailed work. MapartCraft’s map-item metric is listed but not recommended for 3D.
 

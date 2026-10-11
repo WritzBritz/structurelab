@@ -104,9 +104,40 @@ async function handleMessage(request: PreviewRequest) {
     })
 
     postProgress(id, 0.78, 'Cleaning studio props…')
-    const cleaned = skipOutlierFilter
-      ? parsed.groups
-      : parsed.groups.map((g) => filterOutliers(g))
+    const totalTris = parsed.groups.reduce((n, g) => n + g.triangleCount, 0)
+    // Extremely dense meshes: outlier cleaning costs more than it saves for preview.
+    const skipClean = Boolean(skipOutlierFilter) || totalTris > 1_500_000
+    const cleaned: typeof parsed.groups = []
+    if (skipClean) {
+      cleaned.push(...parsed.groups)
+      postProgress(id, 0.96, 'Preparing meshes…')
+    } else {
+      const groupCount = Math.max(parsed.groups.length, 1)
+      for (let i = 0; i < parsed.groups.length; i += 1) {
+        const group = parsed.groups[i]!
+        cleaned.push(
+          await filterOutliers(group, async (done, total) => {
+            const groupBase = i / groupCount
+            const groupSpan = 1 / groupCount
+            const local = total > 0 ? done / total : 1
+            postProgress(
+              id,
+              0.78 + (groupBase + local * groupSpan) * 0.18,
+              'Cleaning studio props…',
+            )
+            await new Promise<void>((resolve) => setTimeout(resolve, 0))
+          }),
+        )
+        postProgress(
+          id,
+          0.78 + ((i + 1) / groupCount) * 0.18,
+          'Cleaning studio props…',
+        )
+        if (i + 1 < parsed.groups.length) {
+          await new Promise<void>((resolve) => setTimeout(resolve, 0))
+        }
+      }
+    }
     const filteredOut =
       parsed.groups.reduce((n, g) => n + g.triangleCount, 0)
       - cleaned.reduce((n, g) => n + g.triangleCount, 0)
@@ -418,7 +449,10 @@ function pushVertex(
   colOut.push(color[0], color[1], color[2])
 }
 
-function filterOutliers(mesh: PreviewGroup): PreviewGroup {
+async function filterOutliers(
+  mesh: PreviewGroup,
+  onChunk?: (done: number, total: number) => void | Promise<void>,
+): Promise<PreviewGroup> {
   const { objectName, positions, sourceVertexIndices, colors, uvs, mapKd, triangleCount } = mesh
   if (triangleCount < 32) return mesh
   const hasUv = uvs.length >= triangleCount * 6
@@ -458,6 +492,7 @@ function filterOutliers(mesh: PreviewGroup): PreviewGroup {
   const uvOut: number[] = []
   const sourceOut: number[] = []
   let kept = 0
+  const chunk = 48_000
   for (let t = 0; t < triangleCount; t += 1) {
     const i = t * 9
     const ax = positions[i]!
@@ -473,24 +508,41 @@ function filterOutliers(mesh: PreviewGroup): PreviewGroup {
       Number(inBox(ax, ay, az, clipMin, clipMax))
       + Number(inBox(bx, by, bz, clipMin, clipMax))
       + Number(inBox(cx, cy, cz, clipMin, clipMax))
-    if (inside === 0) continue
-    if (inside < 3) {
+    if (inside === 0) {
+      // fall through to next triangle
+    } else if (inside < 3) {
       const longest = Math.max(
         dist(ax, ay, az, bx, by, bz),
         dist(bx, by, bz, cx, cy, cz),
         dist(cx, cy, cz, ax, ay, az),
       )
-      if (longest > aabbDiag * 1.05) continue
+      if (longest > aabbDiag * 1.05) {
+        // skip stretched outlier
+      } else {
+        for (let k = 0; k < 9; k += 1) posOut.push(positions[i + k]!)
+        for (let k = 0; k < 9; k += 1) colOut.push(colors[i + k]!)
+        const source = t * 3
+        for (let k = 0; k < 3; k += 1) sourceOut.push(sourceVertexIndices[source + k]!)
+        if (hasUv) {
+          const u = t * 6
+          for (let k = 0; k < 6; k += 1) uvOut.push(uvs[u + k]!)
+        }
+        kept += 1
+      }
+    } else {
+      for (let k = 0; k < 9; k += 1) posOut.push(positions[i + k]!)
+      for (let k = 0; k < 9; k += 1) colOut.push(colors[i + k]!)
+      const source = t * 3
+      for (let k = 0; k < 3; k += 1) sourceOut.push(sourceVertexIndices[source + k]!)
+      if (hasUv) {
+        const u = t * 6
+        for (let k = 0; k < 6; k += 1) uvOut.push(uvs[u + k]!)
+      }
+      kept += 1
     }
-    for (let k = 0; k < 9; k += 1) posOut.push(positions[i + k]!)
-    for (let k = 0; k < 9; k += 1) colOut.push(colors[i + k]!)
-    const source = t * 3
-    for (let k = 0; k < 3; k += 1) sourceOut.push(sourceVertexIndices[source + k]!)
-    if (hasUv) {
-      const u = t * 6
-      for (let k = 0; k < 6; k += 1) uvOut.push(uvs[u + k]!)
+    if (onChunk && t > 0 && t % chunk === 0) {
+      await onChunk(t, triangleCount)
     }
-    kept += 1
   }
 
   if (kept < 8) return mesh

@@ -10,7 +10,6 @@ import { blockTextureCandidates } from './blockTextures'
 import { ensureBrowserTexture, ensureRgbaPngBytes } from './decodeImage'
 import { catalogExtraMaterials, catalogEyesOverlayPath, catalogOuterLayerPath } from './entityCatalogFixes'
 import { entityModelToPart } from './entityCubesToObj'
-import { catalogEntityBoxIsEnlarged } from './objPartPose'
 import type { ScenePartLocal } from '../../types'
 import { hasDedicatedBabyMesh, humanoidModelFor, type VanillaHumanoid } from './vanillaHumanoids'
 import {
@@ -933,17 +932,12 @@ export async function ensureCatalogEntityTextures(part: ScenePartLocal): Promise
     if (!textures[name]) textures[name] = mainBytes
   }
 
-  // Snap back to native when the statue is still catalog-sized (angry Enderman
-  // used to be 5 blocks short). Do not use a ±7 slop — that swallowed Medium /
-  // custom sizes on bats and bees whose whole AABB is under 8 blocks.
+  // Grow to a larger native AABB (angry Enderman used to be 5 blocks short),
+  // but never shrink — rebuild AABBs can wobble by 1 block and were crushing
+  // multi-mob scenes after convert when returning to Sources.
   const nativeW = rebuilt.width ?? part.width
   const nativeH = rebuilt.height ?? part.height
   const nativeL = rebuilt.length ?? part.length
-  const keepUserSize = catalogEntityBoxIsEnlarged(part, {
-    width: nativeW,
-    height: nativeH,
-    length: nativeL,
-  })
 
   return {
     ...part,
@@ -953,9 +947,9 @@ export async function ensureCatalogEntityTextures(part: ScenePartLocal): Promise
     expectedMtlFileName: rebuilt.expectedMtlFileName,
     textures,
     expectedTextureNames: [...new Set(Object.keys(textures))],
-    width: keepUserSize ? part.width : nativeW,
-    height: keepUserSize ? part.height : nativeH,
-    length: keepUserSize ? part.length : nativeL,
+    width: Math.max(part.width, nativeW),
+    height: Math.max(part.height, nativeH),
+    length: Math.max(part.length, nativeL),
     skinPose: sanitizeCatalogSkinPose(mobId, part.skinPose ?? rebuilt.skinPose, rebuilt.skinPose),
   }
 }

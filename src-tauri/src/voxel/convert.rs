@@ -50,6 +50,10 @@ pub struct ModelConvertOptions {
     pub fit: VoxelFit,
     #[serde(default)]
     pub hollow: bool,
+    /// Keep only voxels visible from exterior multi-view cameras (stronger than hollow,
+    /// but preserves overhangs unlike axis silhouette).
+    #[serde(default)]
+    pub outer_silhouette: bool,
     /// Honor texture alpha as cutouts (catalog entities). Default fills
     /// transparent texels with vertex colour for character meshes.
     #[serde(default)]
@@ -170,6 +174,7 @@ impl Default for ModelConvertOptions {
             length: 64,
             fit: VoxelFit::Fit,
             hollow: false,
+            outer_silhouette: false,
             cutout: false,
             disabled_color_ids: Vec::new(),
             block_overrides: BTreeMap::new(),
@@ -215,6 +220,9 @@ pub fn convert_model(
         options.cutout,
         &options.uv,
     )?;
+    if options.outer_silhouette {
+        super::voxelize::hollow_outer_multiview(&mut grid);
+    }
     let occupied_voxels = grid.occupied_count() as u32;
     let shared = SharedMaterialOptions::from(options);
     validate_shared_materials(&shared, minecraft_version)?;
@@ -393,7 +401,7 @@ pub fn build_from_shared(
             x: x as i32,
             y: y as i32,
             z: z as i32,
-            state: candidate.block.clone(),
+            state: candidate.block.clone().stabilize_for_structure_paste(),
         });
     }
 

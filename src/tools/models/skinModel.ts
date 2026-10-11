@@ -79,12 +79,16 @@ export async function inspectPlayerSkin(
 /**
  * Minecraft player arm model (Steve 4px vs Alex 3px).
  *
- * Classic right-arm back occupies u=52..55. Slim only uses u=51..53, so
- * columns 54–55 are unused. Default Alex leaves them transparent; Steve paints
- * them. Same idea on the 64×64 left arm (u=46–47).
+ * Matches skinview-utils `inferModelType` (used by skinview3d / NameMC-style
+ * viewers). Slim right/left arms leave four unused strips on the first layer:
+ *   right: (50,16) 2×4 and (54,20) 2×12
+ *   left:  (42,48) 2×4 and (46,52) 2×12
+ * Classic forbids transparency there. Any non-opaque pixel in those strips
+ * (or the strips being solid black / solid white placeholders) ⇒ slim.
+ * HD skins use the same layout units × (width/64).
  *
- * This is how the launcher / NameMC / MineSkin classify a PNG when the file
- * has no Slim metadata.
+ * Important: do not sample front-face “4th columns” — on slim those texels are
+ * part of the inner arm face and are supposed to be painted.
  */
 export function detectSlimSkin(image: RgbaImage | null | undefined): boolean | null {
   if (!image) return null
@@ -93,32 +97,27 @@ export function detectSlimSkin(image: RgbaImage | null | undefined): boolean | n
   // Slim (Alex) only exists on 64×64 and HD multiples.
   if (atlas.legacy) return false
 
-  const sx = atlas.scale
-  const sy = atlas.scale
-  let transparent = 0
-  let samples = 0
-
-  const probe = (u: number, v: number) => {
-    samples += 1
-    if (alphaAt(image, (u + 0.5) * sx, (v + 0.5) * sy) < 128) transparent += 1
-  }
-
-  // Right-arm back, 4th (and leftover) column — classic-only texels.
-  for (const u of [54, 55]) {
-    for (let v = 20; v < 32; v += 2) probe(u, v)
-  }
-  // Left arm on 64×64 sheets (same unused strip).
+  const scale = atlas.scale
+  const regions: Array<[number, number, number, number]> = [
+    [50, 16, 2, 4],
+    [54, 20, 2, 12],
+  ]
   if (atlas.layoutH >= 64) {
-    for (const u of [46, 47]) {
-      for (let v = 52; v < 64; v += 2) probe(u, v)
-    }
+    regions.push([42, 48, 2, 4], [46, 52, 2, 12])
   }
 
-  if (samples === 0) return null
-  const ratio = transparent / samples
-  if (ratio >= 0.7) return true
-  if (ratio <= 0.3) return false
-  return null
+  const hasGap = regions.some((r) => regionHasTransparency(image, r[0], r[1], r[2], r[3], scale))
+  if (hasGap) return true
+
+  const allBlack = regions.every((r) => regionIsSolid(image, r[0], r[1], r[2], r[3], scale, 0, 0, 0))
+  if (allBlack) return true
+
+  const allWhite = regions.every((r) =>
+    regionIsSolid(image, r[0], r[1], r[2], r[3], scale, 255, 255, 255),
+  )
+  if (allWhite) return true
+
+  return false
 }
 
 /** Filename fallback when the unused arm strip is painted or empty. */
@@ -131,11 +130,66 @@ export function slimHintFromFileName(fileName: string): boolean | null {
 
 export async function detectSlimSkinBytes(bytes: Uint8Array, fileName?: string): Promise<boolean> {
   const image = await decodeImageRgba(bytes)
-  return detectSlimSkin(image) ?? slimHintFromFileName(fileName ?? '') ?? false
+  // Pixel detection always returns true/false for valid modern atlases.
+  const detected = detectSlimSkin(image)
+  if (detected != null) return detected
+  return slimHintFromFileName(fileName ?? '') ?? false
 }
 
-function alphaAt(image: RgbaImage, x: number, y: number): number {
+function rgbaAt(image: RgbaImage, x: number, y: number): [number, number, number, number] {
   const ix = Math.min(image.width - 1, Math.max(0, Math.floor(x)))
   const iy = Math.min(image.height - 1, Math.max(0, Math.floor(y)))
-  return image.data[(iy * image.width + ix) * 4 + 3] ?? 0
+  const i = (iy * image.width + ix) * 4
+  return [
+    image.data[i] ?? 0,
+    image.data[i + 1] ?? 0,
+    image.data[i + 2] ?? 0,
+    image.data[i + 3] ?? 0,
+  ]
+}
+
+/** True if any pixel in the layout rect is not fully opaque (skinview-utils). */
+function regionHasTransparency(
+  image: RgbaImage,
+  layoutX: number,
+  layoutY: number,
+  layoutW: number,
+  layoutH: number,
+  scale: number,
+): boolean {
+  const x0 = layoutX * scale
+  const y0 = layoutY * scale
+  const w = layoutW * scale
+  const h = layoutH * scale
+  for (let y = 0; y < h; y += 1) {
+    for (let x = 0; x < w; x += 1) {
+      const [, , , a] = rgbaAt(image, x0 + x, y0 + y)
+      if (a !== 255) return true
+    }
+  }
+  return false
+}
+
+function regionIsSolid(
+  image: RgbaImage,
+  layoutX: number,
+  layoutY: number,
+  layoutW: number,
+  layoutH: number,
+  scale: number,
+  r: number,
+  g: number,
+  b: number,
+): boolean {
+  const x0 = layoutX * scale
+  const y0 = layoutY * scale
+  const w = layoutW * scale
+  const h = layoutH * scale
+  for (let y = 0; y < h; y += 1) {
+    for (let x = 0; x < w; x += 1) {
+      const [pr, pg, pb, pa] = rgbaAt(image, x0 + x, y0 + y)
+      if (pr !== r || pg !== g || pb !== b || pa !== 255) return false
+    }
+  }
+  return true
 }

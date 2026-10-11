@@ -4072,3 +4072,301 @@ input[type="checkbox"]:disabled {
   width: 56px;
   height: 56px;
 }
+
+/* Place datapack build dialog */
+.datapack-build-dialog {
+  display: grid;
+  grid-template-columns: minmax(280px, 340px) minmax(0, 1fr);
+  gap: 16px;
+  min-height: min(62vh, 520px);
+  height: 100%;
+  align-items: stretch;
+}
+
+.datapack-build-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.datapack-mode-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border-radius: 10px;
+  border: 1px solid var(--gray-a5);
+  background: var(--gray-a2);
+}
+
+.datapack-mode-section--paste {
+  border-color: var(--accent-a5);
+  background: var(--accent-a2);
+}
+
+.datapack-mode-section--animate {
+  border-color: var(--gray-a6);
+  background: var(--color-panel-solid);
+}
+
+.datapack-mode-kicker {
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--gray-11);
+}
+
+.datapack-optimal-stats {
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--gray-a3);
+  border: 1px solid var(--gray-a5);
+  color: var(--gray-12);
+  font-variant-numeric: tabular-nums;
+}
+
+.datapack-build-hint {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--gray-11);
+}
+
+.datapack-build-hint code {
+  font-size: 11px;
+}
+
+.datapack-build-warn {
+  color: var(--amber-11);
+}
+
+.datapack-build-preview-wrap {
+  min-width: 0;
+  min-height: 380px;
+  height: 100%;
+  border-radius: 10px;
+  border: 1px solid var(--gray-a5);
+  background: var(--gray-2);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.datapack-build-preview {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.datapack-build-preview-stage {
+  flex: 1;
+  min-height: 300px;
+  position: relative;
+  background: var(--gray-2);
+}
+
+.datapack-build-preview-3d-host {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.datapack-build-preview-3d-host.is-active {
+  visibility: visible;
+  pointer-events: auto;
+}
+
+.datapack-build-preview-3d-host canvas {
+  display: block;
+  width: 100% !important;
+  height: 100% !important;
+}
+
+.datapack-build-preview-2d {
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  max-width: 100%;
+  max-height: 100%;
+  width: auto !important;
+  height: auto !important;
+  object-fit: contain;
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.datapack-build-preview-2d.is-active {
+  visibility: visible;
+  pointer-events: auto;
+}
+
+.datapack-build-preview-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px 12px 12px;
+  border-top: 1px solid var(--gray-a5);
+  background: var(--color-panel-solid);
+}
+
+.datapack-build-preview-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.datapack-build-preview-toggles {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.datapack-timeline {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.datapack-timeline-transport {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.datapack-timeline-time {
+  flex-shrink: 0;
+  min-width: 2.6em;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--gray-11);
+  user-select: none;
+}
+
+.datapack-timeline-time.is-end {
+  text-align: right;
+}
+
+.datapack-timeline-track {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  height: 28px;
+  border-radius: 6px;
+  cursor: pointer;
+  touch-action: none;
+  outline: none;
+  background: var(--gray-3);
+  border: 1px solid var(--gray-a6);
+  box-shadow: inset 0 1px 2px var(--gray-a4);
+}
+
+.datapack-timeline-track:focus-visible {
+  border-color: var(--accent-8);
+  box-shadow:
+    inset 0 1px 2px var(--gray-a4),
+    0 0 0 2px var(--accent-a5);
+}
+
+.datapack-timeline-rail {
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  top: 50%;
+  height: 4px;
+  transform: translateY(-50%);
+  border-radius: 999px;
+  background: var(--gray-a6);
+}
+
+.datapack-timeline-fill {
+  position: absolute;
+  left: 10px;
+  top: 50%;
+  height: 4px;
+  transform: translateY(-50%);
+  border-radius: 999px;
+  background: var(--accent-9);
+  pointer-events: none;
+}
+
+.datapack-timeline-marks {
+  position: absolute;
+  inset: 0 10px;
+  pointer-events: none;
+}
+
+.datapack-timeline-mark {
+  position: absolute;
+  top: 50%;
+  width: 1px;
+  height: 8px;
+  margin-top: -10px;
+  background: var(--gray-a7);
+  transform: translateX(-50%);
+}
+
+.datapack-timeline-mark.is-end {
+  height: 10px;
+  margin-top: -11px;
+  background: var(--gray-a8);
+}
+
+/* Circular scrub thumb — centred on the fill rail */
+.datapack-timeline-thumb {
+  position: absolute;
+  top: 50%;
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+  transform: translate(-50%, -50%);
+  background: var(--accent-9);
+  border: 2px solid var(--color-panel-solid);
+  box-shadow: 0 0 0 1px var(--accent-a7);
+  pointer-events: none;
+  z-index: 1;
+}
+
+.datapack-timeline.is-disabled .datapack-timeline-track {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.datapack-timeline.is-disabled .datapack-timeline-fill,
+.datapack-timeline.is-disabled .datapack-timeline-thumb {
+  background: var(--gray-8);
+  box-shadow: none;
+}
+
+.datapack-build-preview-empty {
+  flex: 1;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  color: var(--gray-11);
+  font-size: 13px;
+  text-align: center;
+}
+
+@media (max-width: 860px) {
+  .datapack-build-dialog {
+    grid-template-columns: 1fr;
+  }
+
+  .datapack-build-preview-wrap {
+    min-height: 320px;
+  }
+}

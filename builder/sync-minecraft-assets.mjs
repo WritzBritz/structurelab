@@ -135,6 +135,7 @@ for (const version of versions) {
   block-icons/      inventory-style icons for the material browser
   block-textures/   in-world face textures for 3D previews
   entity-textures/  mob/player sheets for Add from Minecraft
+                    (includes entity-textures/cape/ official cape PNGs)
 
 Replace PNGs here if needed; restart the app after changes.
 `,

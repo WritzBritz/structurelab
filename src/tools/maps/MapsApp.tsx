@@ -1,6 +1,14 @@
 import { lazy, Suspense, startTransition, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Button, Checkbox, IconButton, Text } from '@radix-ui/themes'
-import { convert, loadMapPreviewVoxels, loadPalette, saveExport } from '../../api'
+import {
+  convert,
+  datapackPlaceCommand,
+  datapackStopCommand,
+  loadMapPreviewVoxels,
+  loadPalette,
+  sanitizeDatapackName,
+  saveExport,
+} from '../../api'
 import { convertFileSrc } from '@tauri-apps/api/core'
 import { BlockIcon } from '../../components/BlockIcon'
 import { BlockReplaceDialog, type BlockReplaceTarget } from '../../components/BlockReplaceDialog'
@@ -10,7 +18,7 @@ import { ThemeToggle } from '../../theme/AppTheme'
 import { MapColorSwatch } from '../../components/MapColorSwatch'
 import { MissingTextureWarnings } from '../../components/MissingTextureWarnings'
 import { CopyableNotice, TopbarStatus } from '../../components/AppErrorHost'
-import { statusFromError } from '../../appError'
+import { copyText, statusFromError } from '../../appError'
 import {
   applyMaterialPreset,
   baseBlockId,
@@ -50,6 +58,7 @@ import {
   orientationLabel,
   type ConversionResponse,
   type ConvertOptions,
+  type DatapackPattern,
   type ExportFormat,
   type MapColor,
   type PaletteFile,
@@ -60,6 +69,9 @@ import {
   MAP_IMAGE_ACCEPT,
   MAP_IMAGE_FORMATS_HINT,
 } from './imageImport'
+import { DatapackBuildDialog } from '../models/DatapackBuildDialog'
+import { DEFAULT_DATAPACK_TARGET_SECONDS } from '../models/datapackOrder'
+import { packedPreviewToSceneVoxels } from './packedPreviewToSceneVoxels'
 import {
   mapsCoalesceKey,
   previewUrlFromImageBytes,
@@ -126,6 +138,13 @@ export default function MapsApp({ onBack }: { onBack: () => void }) {
   const [options, setOptions] = useState<ConvertOptions>(defaultOptions)
   const [result, setResult] = useState<ConversionResponse | null>(null)
   const [litematicMapSubregions, setLitematicMapSubregions] = useState(false)
+  const [datapackName, setDatapackName] = useState('build')
+  const [datapackPattern, setDatapackPattern] = useState<DatapackPattern>('instant')
+  const [datapackBlocksPerTick, setDatapackBlocksPerTick] = useState(16)
+  const [datapackDelayTicks, setDatapackDelayTicks] = useState(0)
+  const [datapackTargetSeconds, setDatapackTargetSeconds] = useState(DEFAULT_DATAPACK_TARGET_SECONDS)
+  const [datapackPiecesPerTick, setDatapackPiecesPerTick] = useState(8)
+  const [datapackDialogOpen, setDatapackDialogOpen] = useState(false)
   const [status, setStatus] = useState('Drop an image to begin')
   const [busy, setBusy] = useState(false)
   const [loadProgress, setLoadProgress] = useState<{
@@ -176,12 +195,24 @@ export default function MapsApp({ onBack }: { onBack: () => void }) {
     activePreset,
     imageBytes,
     fileName,
+    datapackName,
+    datapackPattern,
+    datapackBlocksPerTick,
+    datapackDelayTicks,
+    datapackTargetSeconds,
+    datapackPiecesPerTick,
   })
   historySnapshotRef.current = {
     options,
     activePreset,
     imageBytes,
     fileName,
+    datapackName,
+    datapackPattern,
+    datapackBlocksPerTick,
+    datapackDelayTicks,
+    datapackTargetSeconds,
+    datapackPiecesPerTick,
   }
 
   const applyHistorySnapshot = useCallback((snapshot: MapsHistorySnapshot) => {
@@ -190,6 +221,12 @@ export default function MapsApp({ onBack }: { onBack: () => void }) {
       setActivePreset(snapshot.activePreset)
       setFileName(snapshot.fileName)
       setImageBytes(snapshot.imageBytes)
+      setDatapackName(snapshot.datapackName)
+      setDatapackPattern(snapshot.datapackPattern)
+      setDatapackBlocksPerTick(snapshot.datapackBlocksPerTick)
+      setDatapackDelayTicks(snapshot.datapackDelayTicks)
+      setDatapackTargetSeconds(snapshot.datapackTargetSeconds)
+      setDatapackPiecesPerTick(snapshot.datapackPiecesPerTick)
       setSourceUrl((previous) => {
         if (previous) URL.revokeObjectURL(previous)
         return previewUrlFromImageBytes(snapshot.imageBytes)
@@ -632,6 +669,21 @@ export default function MapsApp({ onBack }: { onBack: () => void }) {
   }
 
   const stats = result?.build
+  const totalBlockCount = useMemo(
+    () => result?.build.materials.reduce((sum, material) => sum + material.count, 0) ?? 0,
+    [result],
+  )
+  const datapackVoxels = useMemo(
+    () =>
+      result?.previewVoxels
+        ? packedPreviewToSceneVoxels(result.previewVoxels, result.previewBlockPalette ?? [])
+        : [],
+    [result?.previewVoxels, result?.previewBlockPalette],
+  )
+  const datapackSize = useMemo((): [number, number, number] => {
+    if (!result) return [1, 1, 1]
+    return [result.build.width, result.build.height, result.build.length]
+  }, [result])
   const previewColourSrc = useMemo(() => {
     if (!result) return ''
     const staged = result.previewImagePath?.trim()
@@ -825,6 +877,87 @@ export default function MapsApp({ onBack }: { onBack: () => void }) {
     }),
     [],
   )
+
+  async function ensureMapPreviewVoxelsLoaded(): Promise<boolean> {
+    if (!result) return false
+    if ((result.previewVoxelStride ?? 1) !== 0) return true
+    if (result.previewVoxels) return true
+    setVoxelsLoading(true)
+    setStatus('Loading 3D preview…')
+    try {
+      const packed = await loadMapPreviewVoxels()
+      setResult((current) =>
+        current
+          ? {
+              ...current,
+              previewBlockPalette: packed.previewBlockPalette,
+              previewVoxels: packed.previewVoxels,
+              previewVoxelStride: packed.previewVoxelStride,
+            }
+          : current,
+      )
+      return true
+    } catch (error: unknown) {
+      setStatus(statusFromError('3D preview failed', error, { operation: 'load 3D preview' }))
+      return false
+    } finally {
+      setVoxelsLoading(false)
+    }
+  }
+
+  async function openDatapackDialog() {
+    if (!result || convertPending || busy) return
+    const ok = await ensureMapPreviewVoxelsLoaded()
+    if (!ok) return
+    setDatapackDialogOpen(true)
+  }
+
+  async function exportDatapackAndCopyPlace() {
+    if (!result || convertPending) return
+    const id = sanitizeDatapackName(datapackName)
+    const placeCmd = datapackPlaceCommand(id)
+    const stopCmd = datapackStopCommand(id)
+    const animated = datapackPattern !== 'instant'
+    try {
+      setBusy(true)
+      setLoadProgress({ ratio: 0.05, label: 'Preparing datapack…' })
+      const saved = await saveExport('commandDatapack', {
+        minecraftVersion: result.build.minecraftVersion,
+        dataVersion: result.build.dataVersion,
+        datapackName: id,
+        datapackPattern,
+        datapackBlocksPerTick:
+          datapackPattern === 'optimal' ? datapackPiecesPerTick : datapackBlocksPerTick,
+        datapackDelayTicks,
+        onStart: () => setLoadProgress({ ratio: 0.1, label: 'Exporting datapack…' }),
+        onProgress: (ratio, label) => {
+          setLoadProgress({ ratio, label })
+          setStatus(label)
+        },
+      })
+      if (!saved) {
+        setStatus('Export cancelled')
+        return
+      }
+      const ok = await copyText(placeCmd)
+      setStatus(
+        ok
+          ? animated
+            ? `Datapack “${id}” saved. Copied “${placeCmd}” — extract into datapacks, /reload, stand at the corner, paste to start. Stop with ${stopCmd}.`
+            : `Datapack “${id}” saved. Copied “${placeCmd}” — extract into the world’s datapacks folder, /reload, stand at the build corner, then paste that command.`
+          : animated
+            ? `Datapack “${id}” saved. After /reload, run: ${placeCmd} (stop: ${stopCmd})`
+            : `Datapack “${id}” saved. After /reload, run: ${placeCmd}`,
+      )
+    } catch (error) {
+      setStatus(
+        statusFromError('Datapack export failed', error, { operation: 'export place datapack' }),
+      )
+    } finally {
+      setBusy(false)
+      setLoadProgress(null)
+    }
+  }
 
   function setVisibleColors(enabled: boolean) {
     recordBeforeChange()
@@ -1986,10 +2119,20 @@ export default function MapsApp({ onBack }: { onBack: () => void }) {
                 {result.build.dataVersion != null ? ` · data ${result.build.dataVersion}` : ''}
               </p>
             ) : null}
+            <div className="size-preset-heading">
+              <strong>Place datapack</strong>
+              <span>Instant or animated placement — customize in a dedicated panel</span>
+            </div>
+            <ExportButton
+              title="Place datapack…"
+              detail={`.zip · ${datapackPlaceCommand(datapackName)}`}
+              primary
+              disabled={!result || convertPending || busy || voxelsLoading}
+              onClick={() => void openDatapackDialog()}
+            />
             <ExportButton
               title="All formats bundle"
-              detail=".zip · recommended"
-              primary
+              detail=".zip · schematics"
               disabled={!result || convertPending || busy}
               onClick={() =>
                 void runExport('all', setStatus, result?.build, litematicMapSubregions, exportBusy)
@@ -2073,6 +2216,12 @@ export default function MapsApp({ onBack }: { onBack: () => void }) {
                 )
               }
             />
+            <div className="field-hint">
+              <p>
+                <strong>Place datapack:</strong> opens a panel for Instant / Optimal paste or
+                animated patterns, with a live preview, then export zip and copy the start command.
+              </p>
+            </div>
           </div>
         </aside>
       </main>
@@ -2164,6 +2313,47 @@ export default function MapsApp({ onBack }: { onBack: () => void }) {
           )}
         </div>
       </AppDialog>
+
+      <DatapackBuildDialog
+        open={datapackDialogOpen && Boolean(result)}
+        onOpenChange={setDatapackDialogOpen}
+        voxels={datapackVoxels}
+        size={datapackSize}
+        blockCount={Math.max(totalBlockCount, datapackVoxels.length)}
+        busy={busy || convertPending || voxelsLoading}
+        datapackName={datapackName}
+        onDatapackNameChange={(name) => {
+          recordBeforeChange('datapack')
+          setDatapackName(name)
+        }}
+        onDatapackNameEditEnd={endCoalesce}
+        pattern={datapackPattern}
+        onPatternChange={(next) => {
+          recordBeforeChange('datapack')
+          setDatapackPattern(next)
+          endCoalesce()
+        }}
+        targetSeconds={datapackTargetSeconds}
+        onTargetSecondsChange={(value) => {
+          recordBeforeChange('datapack')
+          setDatapackTargetSeconds(value)
+        }}
+        onTargetSecondsEditEnd={endCoalesce}
+        blocksPerTick={datapackBlocksPerTick}
+        onBlocksPerTickChange={(value) => {
+          setDatapackBlocksPerTick(value)
+        }}
+        delayTicks={datapackDelayTicks}
+        onDelayTicksChange={(value) => {
+          recordBeforeChange('datapack')
+          setDatapackDelayTicks(value)
+        }}
+        onDelayTicksEditEnd={endCoalesce}
+        onPiecesPerTickChange={setDatapackPiecesPerTick}
+        onExport={() => {
+          void exportDatapackAndCopyPlace()
+        }}
+      />
 
       {replaceTarget && palette && (
         <BlockReplaceDialog

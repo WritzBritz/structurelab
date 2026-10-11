@@ -1,4 +1,4 @@
-import type { ConvertOptions } from '../../types'
+import type { ConvertOptions, DatapackPattern } from '../../types'
 import type { MaterialPreset } from '../../materials'
 import { useDocumentHistory, type HistoryProgress } from '../../history/useDocumentHistory'
 
@@ -8,6 +8,12 @@ export type MapsHistorySnapshot = {
   /** Shared immutable reference — do not mutate in place. */
   imageBytes: Uint8Array | null
   fileName: string
+  datapackName: string
+  datapackPattern: DatapackPattern
+  datapackBlocksPerTick: number
+  datapackDelayTicks: number
+  datapackTargetSeconds: number
+  datapackPiecesPerTick: number
 }
 
 export type { HistoryProgress }
@@ -29,6 +35,12 @@ export function cloneMapsSnapshot(snapshot: MapsHistorySnapshot): MapsHistorySna
     activePreset: snapshot.activePreset,
     imageBytes: snapshot.imageBytes,
     fileName: snapshot.fileName,
+    datapackName: snapshot.datapackName,
+    datapackPattern: snapshot.datapackPattern,
+    datapackBlocksPerTick: snapshot.datapackBlocksPerTick,
+    datapackDelayTicks: snapshot.datapackDelayTicks,
+    datapackTargetSeconds: snapshot.datapackTargetSeconds,
+    datapackPiecesPerTick: snapshot.datapackPiecesPerTick,
   }
 }
 

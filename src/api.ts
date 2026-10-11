@@ -3,6 +3,7 @@ import { save } from '@tauri-apps/plugin-dialog'
 import type {
   ConversionResponse,
   ConvertOptions,
+  DatapackPattern,
   ExportFormat,
   ModelAppearanceCube,
   PaletteFile,
@@ -133,14 +134,6 @@ function base64ToBytes(base64: string): Uint8Array {
   const binary = atob(base64)
   const bytes = new Uint8Array(binary.length)
   for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i)
-  return bytes
-}
-
-/** Official cape PNG from textures.minecraft.net via the native host (no CORS). */
-export async function fetchCapeTexture(hash: string): Promise<Uint8Array> {
-  const encoded = await invoke<string>('fetch_cape_texture', { hash })
-  const bytes = base64ToBytes(encoded)
-  if (bytes.length < 64) throw new Error('cape download was empty')
   return bytes
 }
 
@@ -303,7 +296,47 @@ const exportInfo: Record<
     filter: 'Litematica v7',
   },
   spongeV3: { extension: 'schem', name: 'build.schem', filter: 'Sponge schematic' },
+  commandDatapack: {
+    extension: 'zip',
+    name: 'build-place-datapack.zip',
+    filter: 'Place datapack',
+  },
   all: { extension: 'zip', name: 'build-all-formats.zip', filter: 'All formats' },
+}
+
+/** Minecraft resource path for datapack function/structure ids. */
+export function sanitizeDatapackName(raw: string): string {
+  const cleaned = raw
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 64)
+  return cleaned || 'build'
+}
+
+export function datapackPlaceCommand(name: string): string {
+  return `function structurelab:${sanitizeDatapackName(name)}`
+}
+
+export function datapackStopCommand(name: string): string {
+  return `function structurelab:${sanitizeDatapackName(name)}/stop`
+}
+
+/** Rough in-game duration for an animated place datapack at 20 TPS. */
+export function estimateDatapackBuild(
+  blockCount: number,
+  pattern: DatapackPattern,
+  blocksPerTick: number,
+  delayTicks: number,
+): { steps: number; seconds: number } | null {
+  if (pattern === 'instant' || blockCount <= 0) return null
+  const bpt = Math.max(1, Math.min(65_536, Math.floor(blocksPerTick)))
+  const delay = Math.max(0, Math.min(20, Math.floor(delayTicks)))
+  const steps = Math.ceil(blockCount / bpt)
+  const ticks = steps + Math.max(0, steps - 1) * delay
+  return { steps, seconds: ticks / 20 }
 }
 
 export async function saveExport(
@@ -312,11 +345,23 @@ export async function saveExport(
     minecraftVersion?: string
     dataVersion?: number
     litematicMapSubregions?: boolean
+    datapackName?: string
+    datapackPattern?: DatapackPattern
+    datapackBlocksPerTick?: number
+    datapackDelayTicks?: number
+    datapackRandomSeed?: number
     onStart?: () => void
     onProgress?: (ratio: number, label: string) => void
   },
 ): Promise<boolean> {
-  const info = exportInfo[format]
+  const info = { ...exportInfo[format] }
+  const datapackId =
+    format === 'commandDatapack'
+      ? sanitizeDatapackName(options?.datapackName ?? 'build')
+      : null
+  if (datapackId) {
+    info.name = `${datapackId}-place-datapack.zip`
+  }
   let versionId = options?.minecraftVersion?.trim() || ''
   if (!versionId) {
     try {
@@ -326,9 +371,12 @@ export async function saveExport(
       versionId = ''
     }
   }
-  const defaultPath = versionId
-    ? info.name.replace(/^build/, `build-${versionId}`)
-    : info.name
+  const defaultPath =
+    datapackId && versionId
+      ? `${datapackId}-${versionId}-place-datapack.zip`
+      : versionId
+        ? info.name.replace(/^build/, `build-${versionId}`)
+        : info.name
   const path = await save({
     defaultPath,
     filters: [{ name: info.filter, extensions: [info.extension] }],
@@ -353,6 +401,11 @@ export async function saveExport(
       format,
       path,
       litematicMapSubregions: options?.litematicMapSubregions ?? false,
+      datapackName: datapackId,
+      datapackPattern: options?.datapackPattern ?? 'instant',
+      datapackBlocksPerTick: options?.datapackBlocksPerTick ?? 16,
+      datapackDelayTicks: options?.datapackDelayTicks ?? 0,
+      datapackRandomSeed: options?.datapackRandomSeed ?? 0,
     })
     options?.onProgress?.(1, 'Export saved')
     return true

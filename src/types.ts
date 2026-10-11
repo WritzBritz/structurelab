@@ -47,7 +47,28 @@ export type ExportFormat =
   | 'litematicV6'
   | 'litematicV7'
   | 'spongeV3'
+  | 'commandDatapack'
   | 'all'
+
+/** Progressive place-datapack ordering (Models / Map art / Pixel art export). */
+export type DatapackPattern =
+  | 'instant'
+  | 'optimal'
+  | 'layerYAsc'
+  | 'layerYDesc'
+  | 'axisZAsc'
+  | 'axisXDesc'
+  | 'radialOut'
+  | 'radialIn'
+  | 'sphereOut'
+  | 'sphereIn'
+  | 'spiralOut'
+  | 'spiralIn'
+  | 'layerSpiral'
+  | 'diagonal'
+  | 'checker'
+  | 'goldenSpiral'
+  | 'random'
 
 export interface ConvertOptions {
   mapsX: number
@@ -227,6 +248,8 @@ export interface ModelConvertOptions {
   length: number
   fit: VoxelFit
   hollow: boolean
+  /** Stronger than hollow: keep voxels visible from exterior multi-view cameras. */
+  outerSilhouette?: boolean
   disabledColorIds: number[]
   blockOverrides: Record<number, string>
   blockPack: StatueBlockPack
@@ -335,6 +358,8 @@ export interface ScenePartLocal {
   length: number
   fit: VoxelFit
   hollow: boolean
+  /** Stronger than hollow: keep voxels visible from exterior multi-view cameras. */
+  outerSilhouette?: boolean
   /** Atlas UV offset / scale / flip for textured meshes. */
   uv?: ModelUvOptions
   slimArms: boolean
@@ -385,6 +410,8 @@ export interface ScenePartPayload {
   length: number
   fit: VoxelFit
   hollow: boolean
+  /** Stronger than hollow: keep voxels visible from exterior multi-view cameras. */
+  outerSilhouette?: boolean
   /** Honor texture alpha as cutouts instead of filling them with face colour. */
   cutout?: boolean
   uv?: ModelUvOptions
@@ -493,16 +520,34 @@ export const defaultOptions: ConvertOptions = {
   blockOverrides: {},
 }
 
+/**
+ * Cubes that stay in the Models materials list but start unchecked.
+ * Magma burns entities; living coral dies without water (no blockstate can
+ * keep coral blocks alive in air — Litematica/datapack paste still decays).
+ * Re-enable any of these in the materials list if you want them.
+ */
+export const DEFAULT_DISABLED_STATUE_BLOCKS = [
+  'minecraft:magma_block',
+  'minecraft:tube_coral_block',
+  'minecraft:brain_coral_block',
+  'minecraft:bubble_coral_block',
+  'minecraft:fire_coral_block',
+  'minecraft:horn_coral_block',
+  // Stateful / awkward 26.2 sulfur — spike is also hard-excluded as a mount.
+  'minecraft:potent_sulfur',
+] as const
+
 export const defaultModelOptions: ModelConvertOptions = {
   width: 64,
   height: 64,
   length: 64,
   fit: 'fit',
   hollow: false,
+  outerSilhouette: false,
   disabledColorIds: [],
   blockOverrides: {},
   blockPack: 'everything',
-  disabledBlocks: [],
+  disabledBlocks: [...DEFAULT_DISABLED_STATUE_BLOCKS],
   blockSubstitutions: {},
   supportMode: 'off',
   supportBlock: 'minecraft:cobblestone',
@@ -548,6 +593,7 @@ export function createObjPart(
     length: 64,
     fit: 'fit',
     hollow: false,
+    outerSilhouette: false,
     uv: { ...defaultModelUv },
     slimArms: false,
     objSizePreset: 'medium',
@@ -628,7 +674,8 @@ export function createSkinPart(
     height: native.height * sizeMul,
     length: native.length * sizeMul,
     fit: 'fit',
-    hollow: false,
+    hollow: true,
+    outerSilhouette: false,
     slimArms,
     skinOverlay: options?.skinOverlay,
     skinLimbs,

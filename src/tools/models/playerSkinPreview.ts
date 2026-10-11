@@ -385,13 +385,28 @@ function omitBoxFaces(geometry: THREE.BufferGeometry, hideTop: boolean, hideBott
   geometry.computeVertexNormals()
 }
 
-/** Cape sits behind the body: vanilla north (the design) must face −Z. */
+/**
+ * Cape sits behind the body: vanilla north (the design) must face −Z.
+ * Bent cape halves omit top/bottom, so face indices are not the full-box
+ * 16..23 — find +Z/−Z by normals instead.
+ */
 function swapBoxFrontBackUvs(geometry: THREE.BufferGeometry) {
   const uv = geometry.getAttribute('uv') as THREE.BufferAttribute | undefined
-  if (!uv || uv.count < 24) return
+  const nor = geometry.getAttribute('normal') as THREE.BufferAttribute | undefined
+  if (!uv || !nor || uv.count < 8) return
+  const faceCount = Math.floor(uv.count / 4)
+  let front = -1
+  let back = -1
+  for (let face = 0; face < faceCount; face += 1) {
+    const i = face * 4
+    const nz = (nor.getZ(i) + nor.getZ(i + 1) + nor.getZ(i + 2) + nor.getZ(i + 3)) * 0.25
+    if (nz > 0.5) front = face
+    else if (nz < -0.5) back = face
+  }
+  if (front < 0 || back < 0) return
   for (let v = 0; v < 4; v += 1) {
-    const a = 16 + v
-    const b = 20 + v
+    const a = front * 4 + v
+    const b = back * 4 + v
     const ua = uv.getX(a)
     const va = uv.getY(a)
     uv.setXY(a, uv.getX(b), uv.getY(b))
